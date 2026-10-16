@@ -81,13 +81,14 @@ Pilot measurements on Sol: about 13k selected characters took 117 s; about 41k t
 
 `benchmark.py` compares results with real-world decisions in `studie_ground_truth.csv`, which is on
 `main`; copy it in with `git show origin/main:studie_ground_truth.csv > studie_ground_truth.csv`. Each case
-pins a workbook study and an `as_of` date. The patient is evaluated only on records dated up to then, with
-undated records and all-time cohort summaries removed. A case is skipped if a selected source still names
-the study, since the model could otherwise read the answer.
+pins a workbook study. The patient is evaluated as documented the day before any record first names the
+study (protocol number, code or acronym), with undated records and all-time cohort summaries removed.
+Cases are skipped when the study is named in the patient's earliest record, when no record names it (set
+`as_of` by hand), or when no clinical notes precede the cut-off.
 
 ```sh
 uv run python benchmark.py            # dry run: leak check, cache status
-uv run python benchmark.py --execute  # run uncached stages, print verdict and open criteria
+uv run python benchmark.py --execute --patient PAC-XXXXXXXXXX  # run one case
 ```
 
 Verdicts for enrolled/offered patients: `HIT` (met), `OPEN` (not excluded, open criteria to review),
