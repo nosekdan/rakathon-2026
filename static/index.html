@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#f5f7f6">
+  <title>TrialScreen | Klinický screening</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/lucide.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#patient" aria-label="TrialScreen, karta pacienta"><span class="brand-icon"><i data-lucide="scan-heart"></i></span><span>Trial<span class="brand-light">Screen</span></span></a>
+      <div class="workspace-label">KLINICKÝ WORKSPACE</div>
+      <nav aria-label="Hlavní navigace">
+        <button class="nav-item active" data-view="patient" aria-label="Karta pacienta" title="Karta pacienta"><i data-lucide="contact-round"></i><span>Karta pacienta<small>Ambulantní záznam</small></span><span class="nav-number">01</span></button>
+        <button class="nav-item" data-view="matches" aria-label="Shoda se studiemi" title="Shoda se studiemi"><i data-lucide="list-checks"></i><span>Shoda se studiemi<small>Kritéria a podklady</small></span><span class="nav-number">02</span></button>
+        <button class="nav-item" data-view="debug" aria-label="Data a ladění" title="Data a ladění"><i data-lucide="database"></i><span>Data a ladění<small>Pacienti, studie, běhy</small></span><span class="nav-number">03</span></button>
+      </nav>
+      <div class="sidebar-bottom"><div class="environment"><span class="live-dot"></span>Lokální aplikace</div><div class="dataset-count" id="dataset-count">Načítání datasetu…</div><div class="event-label">RAKATHON <span>2026</span></div></div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar"><div class="breadcrumb">FN Motol a Homolka <span>/</span> Onkologie</div><div class="mode-switch" role="group" aria-label="Zdroj dat"><button data-mode="real" class="selected">Nemocniční data</button><button data-mode="demo">Syntetické demo</button></div></header>
+      <div id="demo-banner" class="demo-banner" hidden><i data-lucide="flask-conical"></i>Syntetický pacient a studie. Nejde o skutečné klinické výsledky.</div>
+      <div id="job-banner" class="job-banner" hidden aria-live="polite"></div>
+      <main id="main" tabindex="-1"><div class="loading"><span class="spinner"></span>Načítání dokumentace</div></main>
+      <footer class="footer"><span>Screening k odbornému posouzení. Nejde o potvrzení zařazení do studie.</span><span id="footer-mode">Pseudonymizovaná data · Posunutá data záznamů</span></footer>
+    </div>
+  </div>
+  <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-title"><div class="dialog-header"><div><div class="eyebrow">ZDROJOVÝ DOKUMENT</div><h2 id="source-title"></h2></div><button class="icon-button" data-close-dialog aria-label="Zavřít zdroj" title="Zavřít"><i data-lucide="x"></i></button></div><div id="source-meta" class="source-meta"></div><pre id="source-text"></pre></dialog>
+  <dialog id="screen-dialog" class="screen-dialog" aria-labelledby="screen-title"><div class="dialog-header"><div><div class="eyebrow">NOVÉ POSOUZENÍ</div><h2 id="screen-title">Vybrat klinické studie</h2></div><button class="icon-button" data-close-dialog aria-label="Zavřít výběr" title="Zavřít"><i data-lucide="x"></i></button></div><div id="screen-options"></div><div class="dialog-actions"><span id="screen-counter"></span><button class="primary-button" id="confirm-screen"><i data-lucide="scan-line"></i>Spustit posouzení</button></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
