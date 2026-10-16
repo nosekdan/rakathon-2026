@@ -17,6 +17,12 @@ derived outputs or credentials belong in Git.
 
 The **Syntetické demo** switch needs no data or API calls and shows all four criterion states and the alert.
 
+The patient card shows a **Klinické studie** widget when at least one precomputed study does not exclude
+the patient (unclear or missing criteria still count: the model never excludes, the doctor decides).
+Clicking it opens **Shoda se studiemi** in a separate window. Results are precomputed (`precompute.py`),
+there is no on-demand screening button. Open a patient with `/?patient=PAC-…` or from **Data a ladění**,
+linked in the footer.
+
 ## How it works
 
 Three stages, each cached by a hash of exactly what it sends to the model. A stage reruns only when

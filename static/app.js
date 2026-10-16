@@ -9,6 +9,10 @@ const allTrials = () => state.mode === 'demo' ? state.demo.trials : state.data.t
 const trialById = identifier => allTrials().find(trial => trial.id === identifier);
 const currentResults = () => state.patient?.results || [];
 const refreshIcons = () => globalThis.lucide?.createIcons();
+const params = new URLSearchParams(location.search);
+// The study-match view runs in its own browser window, opened from the patient card's widget.
+const popup = params.get('view') === 'matches';
+const plural = (count, one, few, many) => count === 1 ? one : count >= 2 && count <= 4 ? few : many;
 let patientRequest = 0;
 let toastTimer;
 
@@ -38,21 +42,34 @@ function sourceTitle(identifier, result=null) {
   return source?.title || (identifier === 'registry' ? 'ClinicalTrials.gov / kritéria' : identifier === 'demo-protocol' ? 'Syntetický protokol' : identifier);
 }
 
-function patientSelector() {
-  const patients = state.mode === 'demo' ? [state.demo.patient] : [state.patient, ...state.data.patients.filter(patient => patient.id !== state.patient.id).slice(0,11)];
-  const options = patients.map(patient => `<option value="${escapeHtml(patient.id)}" ${patient.id === state.patient?.id ? 'selected' : ''}>${escapeHtml(patient.name)} · ${escapeHtml(patient.diagnoses || 'bez kódu')}</option>`).join('');
-  return `<div class="patient-selector"><span>Pacient</span><select id="patient-select" aria-label="Vybrat pacienta">${options}</select><div class="search-field">${icon('search')}<input id="patient-search" placeholder="Hledat ID nebo diagnózu" aria-label="Hledat pacienta"></div></div>`;
+function heading(title, subtitle, action='') {
+  return `<div class="page-heading"><div><div class="eyebrow">ONKOLOGICKÁ AMBULANCE</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${action}</div>`;
 }
 
-function heading(title, subtitle, action=true) {
-  return `<div class="page-heading"><div><div class="eyebrow">ONKOLOGICKÁ AMBULANCE</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${action ? `<button class="primary-button" data-action="screen">${icon('scan-line')}Posoudit studie</button>` : ''}</div>`;
+// Studies with no contradicted criterion. Unclear or missing data never hides a study:
+// the doctor decides, the model never excludes.
+const reviewable = () => currentResults().filter(result => result.summary.status !== 'not_met');
+
+function trialWidget() {
+  const studies = reviewable();
+  if (!studies.length) return '';
+  const complete = studies.filter(result => result.summary.badge).length;
+  const detail = complete ? `${complete} ${plural(complete, 'splňuje', 'splňují', 'splňuje')} všechna kritéria · ostatní k ověření` : 'Žádné kritérium pacienta nevylučuje · ověřit s týmem studie';
+  return `<button class="trial-widget" data-action="open-matches"><span class="widget-icon">${icon('lightbulb')}</span><span class="widget-copy"><span class="widget-eyebrow">KLINICKÉ STUDIE</span><strong>${studies.length} ${plural(studies.length, 'studie', 'studie', 'studií')} k posouzení</strong><small>${detail}</small></span>${icon('arrow-up-right')}</button>`;
+}
+
+function openMatchesWindow() {
+  const first = reviewable().find(result => result.summary.badge) || reviewable()[0];
+  const query = new URLSearchParams({view:'matches', mode:state.mode, patient:state.patient.id, ...(first ? {trial:first.trial_id} : {})});
+  const opened = window.open(`/?${query}`, 'trialscreen-matches', 'popup,width=1180,height=860');
+  if (!opened) throw new Error('Prohlížeč zablokoval nové okno. Povolte vyskakovací okna pro tuto stránku.');
+  opened.focus();
 }
 
 function renderPatient() {
   const patient = state.patient;
   const labPriority = lab => /hemoglobin|kreatinin|neutrofil|trombocyt|bilirubin|albumin|^PSA$/i.test(lab.name) ? 0 : typeof lab.value === 'number' ? 1 : 2;
   const displayedLabs = [...patient.latest_labs].sort((first,second)=>labPriority(first)-labPriority(second)).slice(0,7);
-  const positive = currentResults().filter(result => result.summary.badge);
   const demographicsSource = patient.synthetic ? 'demo-note' : 'cohort';
   const ageEvidence = {source_id:demographicsSource,quote:patient.synthetic ? 'Věk: 64 let' : patient.age ? `${String(patient.age).includes('-') ? 'vek_pasmo' : 'vek'}: ${patient.age}` : ''};
   const genderEvidence = {source_id:demographicsSource,quote:patient.synthetic ? 'Pohlaví: muž' : `pohlavi: ${patient.sex}`};
@@ -63,12 +80,12 @@ function renderPatient() {
     {name:'Výška',value:patient.vitals.height?.value || '—',unit:patient.vitals.height ? 'cm' : '',icon:'ruler',evidence:patient.vitals.height},
     {name:'WHO / ECOG',value:patient.vitals.ecog?.value ?? '—',unit:patient.vitals.ecog ? '/ 4' : '',icon:'activity',evidence:patient.vitals.ecog}
   ];
-  return heading('Karta pacienta', 'Ambulantní přehled a podklady pro klinické studie') + patientSelector() + `
+  return heading('Karta pacienta', 'Ambulantní přehled a podklady pro klinické studie') + `
     <section class="medical-sheet" aria-label="Zdravotní karta">
       <div class="identity-row"><div class="patient-avatar">${icon('user-round')}</div><div class="identity-copy"><h2>${escapeHtml(patient.name)}</h2><div class="identity-meta"><span class="id-label">${escapeHtml(patient.id)}</span><span>·</span><span>${patient.synthetic ? 'Syntetická ukázka' : 'Pseudonymizovaný záznam'}</span>${patient.deceased ? '<span class="status-pill status-not_met">Záznam o úmrtí</span>' : ''}</div></div><div class="record-meta">Poslední dostupný záznam<strong>${date(patient.snapshot_at)}</strong>${patient.synthetic ? 'Ukázková dokumentace' : 'Posunuté datum datasetu'}</div></div>
       <div class="metric-grid">${metrics.map(metric=>`<div class="metric"><div class="metric-label">${icon(metric.icon)}${metric.name}</div><div class="metric-value">${escapeHtml(metric.value)}<small>${metric.unit || ''}</small></div>${metric.evidence ? evidenceButton(metric.evidence,`Zdroj: ${metric.name}`) : '<div class="metric-foot">Údaj není doložen</div>'}</div>`).join('')}</div>
     </section>
-    ${positive.length ? `<button class="eligibility-notice" data-action="open-matches"><span class="notice-icon">${icon('flask-conical')}</span><span><strong>${positive.length} ${positive.length === 1 ? 'studie k posouzení' : 'studie k posouzení'}</strong><small>Dostupná kritéria splněna · Ověřit způsobilost s týmem studie</small></span>${icon('arrow-up-right')}</button>` : ''}
+    ${trialWidget()}
     <div class="record-columns"><section><div class="section-heading">${icon('notebook-tabs')}<h3>Poslední záznamy</h3><span class="count">${patient.notes} zpráv</span></div>
       ${patient.recent_notes.length ? patient.recent_notes.slice(0,6).map(note=>`<button class="note-entry" data-source="${escapeHtml(note.id)}"><span class="note-date">${date(note.date)}</span><span><span class="note-title">${escapeHtml(note.title)}</span><span class="note-id">${escapeHtml(note.id)}</span></span>${icon('arrow-up-right')}</button>`).join('') : '<p class="empty-note">V dostupném exportu nejsou textové zprávy.</p>'}
       <div class="snapshot-note">${icon('clock-3')}Časové údaje odpovídají snapshotu dokumentace.</div></section>
@@ -81,9 +98,9 @@ function resultProgress(result) {
 }
 
 function renderMatches() {
-  const results = currentResults();
-  const header = heading('Shoda se studiemi', `${escapeHtml(state.patient.name)} · Posouzení dostupných kritérií`) + patientSelector();
-  if (!results.length) return header + `<div class="empty-state">${icon('clipboard-search')}<h2>Pacient zatím nebyl posouzen</h2><p>Žádný výsledek neznamená vyloučení. Pro tohoto pacienta zatím není uložené porovnání.</p><button class="primary-button" data-action="screen">${icon('scan-line')}Vybrat studie</button></div>`;
+  const results = [...currentResults()].sort((first, second) => Number(first.summary.status === 'not_met') - Number(second.summary.status === 'not_met'));
+  const header = heading('Shoda se studiemi', `${escapeHtml(state.patient.name)} · ${escapeHtml(state.patient.id)} · Posouzení dostupných kritérií`);
+  if (!results.length) return header + `<div class="empty-state">${icon('clipboard-search')}<h2>Pacient zatím nebyl posouzen</h2><p>Žádný výsledek neznamená vyloučení. Pro tohoto pacienta zatím není uložené porovnání.</p></div>`;
   if (!results.some(result=>result.trial_id===state.trialId)) state.trialId=results[0].trial_id;
   const result=results.find(item=>item.trial_id===state.trialId);
   const trial=trialById(state.trialId);
@@ -115,13 +132,14 @@ function renderDebug() {
   if(state.debugTab==='patients') content=`<table class="data-table"><thead><tr><th>Pacient</th><th>Věk / pohlaví</th><th>Diagnózy</th><th>Zprávy</th><th>Laboratoř</th><th></th></tr></thead><tbody>${shown.map(patient=>`<tr><td><span class="cell-title">${escapeHtml(patient.name)}</span><div class="cell-subtitle id-label">${escapeHtml(patient.id)}</div></td><td>${escapeHtml(patient.age||'Neuvedeno')} / ${patient.sex==='male'?'M':'Ž'}</td><td>${escapeHtml(patient.diagnoses||'Neuvedeno')}</td><td>${patient.notes}</td><td>${patient.labs}</td><td><button class="icon-button" data-patient="${escapeHtml(patient.id)}" title="Otevřít kartu" aria-label="Otevřít ${escapeHtml(patient.id)}">${icon('arrow-up-right')}</button></td></tr>`).join('')}</tbody></table>`;
   else if(state.debugTab==='trials') content=`<table class="data-table"><thead><tr><th>Protokol / zadavatel</th><th>Indikace</th><th>Registr</th><th>Propojení</th><th>Nábor</th><th></th></tr></thead><tbody>${shown.map(trial=>`<tr><td><span class="cell-title">${escapeHtml(trial.protocol)}</span><div class="cell-subtitle">${escapeHtml(trial.sponsor)}</div></td><td>${escapeHtml(trial.diagnosis)}</td><td>${trial.registry?.nct_id?`<a href="${escapeHtml(trial.registry.url)}" target="_blank" rel="noreferrer">${escapeHtml(trial.registry.nct_id)}</a>`:'<span class="muted">Nepropojeno</span>'}</td><td><span class="status-pill ${trial.registry?.state==='resolved'?'status-met':'status-missing'}">${trial.registry?.state==='resolved'?'Ověřené ID':trial.registry?.state==='unresolved'?'Nenalezeno':'Neověřeno'}</span></td><td><span class="cell-subtitle">${escapeHtml(trial.registry?.status||'Nezjištěno')}</span></td><td><button class="icon-button" data-debug-trial="${escapeHtml(trial.id)}" aria-label="Detail ${escapeHtml(trial.protocol)}" title="Zdrojová data">${icon('code-xml')}</button></td></tr>`).join('')}</tbody></table>`;
   else content=`<div class="summary-line"><span>Model: <strong>${escapeHtml(state.data.model)}</strong></span><span>Výsledky pacienta: <strong>${currentResults().length}</strong></span></div><pre class="json-view">${escapeHtml(JSON.stringify({job:state.job,results:currentResults()},null,2))}</pre>`;
-  return heading('Data a ladění','Zdrojové tabulky, ověřené identifikátory a výstupy modelu',false)+`<div class="debug-toolbar"><div class="table-tabs">${[['patients','Pacienti',patients.length],['trials','Studie',trials.length],['runs','Výstupy',currentResults().length]].map(([tab,title,count])=>`<button data-debug-tab="${tab}" class="${tab===state.debugTab?'selected':''}">${title}<small>${count}</small></button>`).join('')}</div>${state.mode==='real'?`<button class="secondary-button" data-action="registry">${icon('refresh-cw')}Propojit registry</button>`:''}</div>${state.debugTab!=='runs'?`<div class="search-field debug-search">${icon('search')}<input id="debug-search" value="${escapeHtml(state.query)}" placeholder="Hledat v tabulce" aria-label="Hledat v tabulce"></div>`:''}<div class="table-wrap">${content}</div>${state.debugTab!=='runs'?`<div class="table-foot"><span>${records.length} záznamů</span><div class="pager"><button class="icon-button" data-page="${state.page-1}" ${state.page===0?'disabled':''} title="Předchozí strana" aria-label="Předchozí strana">${icon('chevron-left')}</button><span>${state.page+1} / ${pageCount}</span><button class="icon-button" data-page="${state.page+1}" ${state.page>=pageCount-1?'disabled':''} title="Další strana" aria-label="Další strana">${icon('chevron-right')}</button></div></div>`:''}`;
+  return heading('Data a ladění','Zdrojové tabulky, ověřené identifikátory a výstupy modelu',`<button class="secondary-button" data-view="patient">${icon('arrow-left')}Karta pacienta</button>`)+`<div class="debug-toolbar"><div class="table-tabs">${[['patients','Pacienti',patients.length],['trials','Studie',trials.length],['runs','Výstupy',currentResults().length]].map(([tab,title,count])=>`<button data-debug-tab="${tab}" class="${tab===state.debugTab?'selected':''}">${title}<small>${count}</small></button>`).join('')}</div>${state.mode==='real'?`<button class="secondary-button" data-action="registry">${icon('refresh-cw')}Propojit registry</button>`:''}</div>${state.debugTab!=='runs'?`<div class="search-field debug-search">${icon('search')}<input id="debug-search" value="${escapeHtml(state.query)}" placeholder="Hledat v tabulce" aria-label="Hledat v tabulce"></div>`:''}<div class="table-wrap">${content}</div>${state.debugTab!=='runs'?`<div class="table-foot"><span>${records.length} záznamů</span><div class="pager"><button class="icon-button" data-page="${state.page-1}" ${state.page===0?'disabled':''} title="Předchozí strana" aria-label="Předchozí strana">${icon('chevron-left')}</button><span>${state.page+1} / ${pageCount}</span><button class="icon-button" data-page="${state.page+1}" ${state.page>=pageCount-1?'disabled':''} title="Další strana" aria-label="Další strana">${icon('chevron-right')}</button></div></div>`:''}`;
 }
 
 function render() {
   if(!state.patient)return;
   document.querySelector('#main').innerHTML=state.view==='patient'?renderPatient():state.view==='matches'?renderMatches():renderDebug();
-  document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('active',button.dataset.view===state.view);button.setAttribute('aria-current',button.dataset.view===state.view?'page':'false');});
+  document.body.classList.toggle('popup',popup);
+  document.querySelector('.footer-link').hidden=state.view==='debug';
   document.querySelectorAll('[data-mode]').forEach(button=>button.classList.toggle('selected',button.dataset.mode===state.mode));
   document.querySelector('#demo-banner').hidden=state.mode!=='demo';
   document.querySelector('#footer-mode').textContent=state.mode==='demo'?'Syntetické ukázkové záznamy':'Pseudonymizovaná data · Posunutá data záznamů';
@@ -133,6 +151,7 @@ async function selectPatient(identifier) {
   const patient=await api(`/api/patients/${encodeURIComponent(identifier)}`);
   if(sequence!==patientRequest||state.mode!=='real')return;
   state.patient=patient;state.trialId=null;state.expanded.clear();state.filter='all';
+  if(!popup)history.replaceState(null,'',`?patient=${encodeURIComponent(identifier)}`);
   render();
 }
 
@@ -153,18 +172,6 @@ async function showSource(identifier,quote='') {
   if(!dialog.open)dialog.showModal();
   requestAnimationFrame(()=>document.querySelector('#source-text mark')?.scrollIntoView({block:'center'}));
 }
-
-function openScreenDialog() {
-  if(state.mode==='demo'){state.view='matches';render();return;}
-  const available=state.data.trials.filter(trial=>trial.registry?.state!=='unresolved');
-  const relevant=trial=>state.patient.diagnoses.includes('C61')&&/prostat/i.test(trial.diagnosis)||state.patient.diagnoses.includes('C64')&&/ledvin|renální/i.test(trial.diagnosis);
-  available.sort((first,second)=>Number(relevant(second))-Number(relevant(first)));
-  document.querySelector('#screen-options').innerHTML=available.length?available.map((trial,index)=>`<label class="screen-option"><input type="checkbox" name="trial" value="${escapeHtml(trial.id)}" ${index<2&&relevant(trial)?'checked':''}><span><strong>${escapeHtml(trial.protocol)}</strong>${escapeHtml(trial.title)}<small>${trial.registry?escapeHtml(trial.registry.status)+' · '+(trial.registry.site_recruiting?'Pracoviště nabírá dle registru':'Nábor na pracovišti nepotvrzen'):'Registr bude ověřen při posouzení'}</small></span></label>`).join(''):'<p class="empty-note">Žádná studie není k dispozici.</p>';
-  document.querySelector('#confirm-screen').disabled=!available.length;
-  updateSelectionCount();document.querySelector('#screen-dialog').showModal();refreshIcons();
-}
-
-function updateSelectionCount(){const count=document.querySelectorAll('#screen-options input:checked').length;document.querySelector('#screen-counter').textContent=`${count} / 5 vybraných studií`;document.querySelector('#confirm-screen').disabled=count===0||count>5;}
 
 async function startJob(payload) {
   state.job=await api('/api/jobs',{method:'POST',body:JSON.stringify(payload)});
@@ -187,10 +194,9 @@ async function pollJob(identifier, failures=0) {
 }
 
 document.addEventListener('click',async event=>{
-  const button=event.target.closest('button,a.brand');if(!button)return;
+  const button=event.target.closest('button');if(!button)return;
   try{
-    if(button.matches('a.brand')){event.preventDefault();state.view='patient';render();}
-    if(button.dataset.view){state.view=button.dataset.view;render();}
+    if(button.dataset.view){state.view=button.dataset.view;render();scrollTo(0,0);}
     if(button.dataset.mode){if(state.mode==='real')state.realPatientId=state.patient.id;await setMode(button.dataset.mode);}
     if(button.dataset.source)await showSource(button.dataset.source,button.dataset.quote||'');
     if(button.hasAttribute('data-close-dialog'))button.closest('dialog').close();
@@ -200,39 +206,36 @@ document.addEventListener('click',async event=>{
     if(button.dataset.page!==undefined){state.page=Number(button.dataset.page);render();}
     if(button.dataset.patient){state.view='patient';if(state.mode==='real')await selectPatient(button.dataset.patient);else render();}
     if(button.dataset.debugTrial){const trial=state.mode==='demo'?trialById(button.dataset.debugTrial):await api(`/api/trials/${encodeURIComponent(button.dataset.debugTrial)}`);document.querySelector('#source-title').textContent=trial.protocol;document.querySelector('#source-meta').textContent='Zdrojová metadata studie';document.querySelector('#source-text').textContent=JSON.stringify(trial,null,2);document.querySelector('#source-dialog').showModal();}
-    if(button.dataset.action==='open-matches'){state.view='matches';state.trialId=currentResults().find(result=>result.summary.badge)?.trial_id;render();}
-    if(button.dataset.action==='screen')openScreenDialog();
+    if(button.dataset.action==='open-matches')openMatchesWindow();
     if(button.dataset.action==='registry')await startJob({kind:'registry'});
     if(button.dataset.action==='dismiss-job')document.querySelector('#job-banner').hidden=true;
-    if(button.id==='confirm-screen'){const selected=[...document.querySelectorAll('#screen-options input:checked')].map(input=>input.value);document.querySelector('#screen-dialog').close();await startJob({kind:'screen',patient_id:state.patient.id,trial_ids:selected});}
   }catch(error){toast(error.message);}
 });
 
 document.addEventListener('change',async event=>{
   try{
-    if(event.target.id==='patient-select')await selectPatient(event.target.value);
     if(event.target.id==='criterion-filter'){state.filter=event.target.value;render();}
-    if(event.target.name==='trial')updateSelectionCount();
   }catch(error){toast(error.message);}
 });
 
 document.addEventListener('input',event=>{
   if(event.target.id==='debug-search'){const cursor=event.target.selectionStart;state.query=event.target.value;state.page=0;render();const field=document.querySelector('#debug-search');field.focus();field.setSelectionRange(cursor,cursor);}
-  if(event.target.id==='patient-search'){
-    const query=event.target.value.toLowerCase();
-    const patients=(state.mode==='demo'?[state.demo.patient]:state.data.patients).filter(patient=>`${patient.id} ${patient.diagnoses} ${patient.name}`.toLowerCase().includes(query)).slice(0,50);
-    const select=document.querySelector('#patient-select');
-    select.innerHTML=patients.map(patient=>`<option value="${escapeHtml(patient.id)}">${escapeHtml(patient.name)} · ${escapeHtml(patient.diagnoses||'bez kódu')}</option>`).join('');
-    select.value=patients.some(patient=>patient.id===state.patient.id)?state.patient.id:'';
-  }
 });
 
 async function initialize(){
   try{
     state.data=await api('/api/bootstrap');
-    document.querySelector('#dataset-count').textContent=`${state.data.patients.length.toLocaleString('cs-CZ')} pacientů · ${state.data.trials.length} studií`;
+    if(popup){
+      document.title='TrialScreen | Shoda se studiemi';
+      state.view='matches';
+      if(params.get('mode')==='demo'){state.mode='demo';state.demo=await api('/api/demo');state.patient=state.demo.patient;}
+      else await selectPatient(params.get('patient'));
+      state.trialId=params.get('trial');
+      render();
+      return;
+    }
     if(!state.data.patients.length)throw new Error('Dataset nebyl nalezen v projektové složce.');
-    const requested=new URLSearchParams(location.search).get('patient');
+    const requested=params.get('patient');
     const patient=state.data.patients.find(item=>item.id===requested)||state.data.patients.find(item=>item.target&&!item.deceased&&item.notes>=5&&item.notes<=15&&item.labs>0)||state.data.patients[0];
     await selectPatient(patient.id);
     const active=state.data.jobs.find(job=>['queued','running'].includes(job.state));if(active)pollJob(active.id);
