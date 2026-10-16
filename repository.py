@@ -20,6 +20,8 @@ VITAL_PATTERNS = {
     "weight": r"\b(?:v[áa]ha|hmotnost)\s*:?\s*(\d{2,3}(?:[.,]\d+)?)\s*kg\b",
     "ecog": r"\b(?:ECOG(?:\s*PS)?|WHO\s*PS|PS)\s*:?\s*([0-4])\b",
 }
+# Cohort columns that are fixed facts about the person; the rest (diagnoses, counts, death) summarize all time.
+DEMOGRAPHIC_COLUMNS = ("pseudonym", "pohlavi", "rok_narozeni", "rok_narozeni_pasmo", "vek", "vek_pasmo")
 
 
 def fingerprint(value: object) -> str:
@@ -102,23 +104,25 @@ def code_label(code: dict) -> str:
     )
 
 
-def patient_record(identifier: str) -> dict:
+def patient_record(identifier: str, as_of: str | None = None) -> dict:
+    """The patient's record; with as_of (YYYY-MM-DD), only what was documented by that day."""
     patient = patients_by_id().get(identifier)
     if patient is None or DATASET is None:
         raise LookupError("Patient not found")
     path = DATASET / "fhir" / f"{identifier}.json"
-    return _patient_record(identifier, path, path.stat().st_mtime_ns)
+    return _patient_record(identifier, path, path.stat().st_mtime_ns, as_of)
 
 
 @lru_cache(maxsize=16)
-def _patient_record(identifier: str, path: Path, mtime: int) -> dict:
+def _patient_record(identifier: str, path: Path, mtime: int, as_of: str | None) -> dict:
     patient = patients_by_id()[identifier]
     bundle = json.loads(path.read_text(encoding="utf-8"))
+    cohort = patient["raw"] if as_of is None else {key: patient["raw"][key] for key in DEMOGRAPHIC_COLUMNS}
     sources: dict[str, dict] = {
         "cohort": {
             "id": "cohort",
             "title": "kohorta.csv / " + identifier,
-            "text": "\n".join(f"{key}: {value}" for key, value in patient["raw"].items()),
+            "text": "\n".join(f"{key}: {value}" for key, value in cohort.items()),
             "date": None,
             "kind": "demographics",
         }
@@ -129,7 +133,15 @@ def _patient_record(identifier: str, path: Path, mtime: int) -> dict:
         resource = entry["resource"]
         kind = resource["resourceType"]
         source_id = resource.get("id") or f"{kind}-{index}"
-        date = resource.get("effectiveDateTime") or resource.get("date")
+        date = (
+            resource.get("effectiveDateTime")
+            or resource.get("date")
+            or resource.get("authoredOn")
+            or resource.get("effectivePeriod", {}).get("start")
+        )
+        if as_of and (not date or date[:10] > as_of):
+            # Undated resources are excluded too: they could come from after the cut-off.
+            continue
         title = code_label(resource.get("code", resource.get("type", {}))) or kind
         text = ""
         if kind == "DocumentReference":
@@ -149,7 +161,6 @@ def _patient_record(identifier: str, path: Path, mtime: int) -> dict:
             labs.append({"name": title, "value": value, "unit": unit, "date": date, "source_id": source_id})
         elif kind in MEDICATION_KINDS:
             medication = code_label(resource.get("medicationCodeableConcept", {}))
-            date = date or resource.get("authoredOn") or resource.get("effectivePeriod", {}).get("start")
             dosage = json.dumps(
                 resource.get("dosageInstruction", resource.get("dosage", {})), ensure_ascii=False
             )
@@ -182,6 +193,7 @@ def _patient_record(identifier: str, path: Path, mtime: int) -> dict:
         latest_labs.setdefault(lab["name"], lab)
     return {
         **patient,
+        "as_of": as_of,
         "sources": sources,
         "vitals": vitals,
         "snapshot_at": max(dated)[:10] if dated else None,

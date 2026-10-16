@@ -425,3 +425,55 @@ def test_real_import_preserves_identifiers_and_sources():
     assert select_sources(record)[0]
     for vital in record["vitals"].values():
         assert record["sources"][vital["source_id"]]["text"][vital["start"] : vital["end"]] == vital["quote"]
+
+
+def test_benchmark_leak_guard_and_verdicts():
+    import benchmark
+
+    pattern = benchmark.leak_pattern("MK-2400-001")
+    assert pattern.search("Screening studie  MK  2400 -001, I")
+    assert pattern.search("Studie MK 2400-001 RECIST")
+    assert not pattern.search("PSA 2400 ng/ml, 001")
+    assert benchmark.verdict("zarazen", "met") == "HIT"
+    assert benchmark.verdict("zarazen", "not_met") == "MISS"
+    assert benchmark.verdict("nabidnuto", "unknown") == "OPEN"
+    assert benchmark.verdict("screen_failure", "not_met") == "HIT"
+    assert benchmark.verdict("zvazovano", "met") == "N/A"
+
+
+def test_as_of_hides_later_and_undated_records(tmp_path, monkeypatch):
+    import json
+
+    import repository
+
+    (tmp_path / "fhir").mkdir()
+    header = "pseudonym;pohlavi;rok_narozeni;rok_narozeni_pasmo;vek;vek_pasmo;zesnuly;diagnozy;ma_cilovou_dg;zprav;lab_vysledku"
+    (tmp_path / "kohorta.csv").write_text(header + "\nPAC-1;male;1950;;75;;ano;C61 C78;ano;3;0\n")
+
+    def note(identifier, date, text):
+        resource = {"resourceType": "DiagnosticReport", "id": identifier, "conclusion": text}
+        return {"resource": {**resource, "effectiveDateTime": date} if date else resource}
+
+    bundle = {
+        "entry": [
+            note("a", "2026-02-01T00:00:00+01:00", "before"),
+            note("b", "2026-03-10", "after"),
+            note("c", None, "undated"),
+        ]
+    }
+    (tmp_path / "fhir" / "PAC-1.json").write_text(json.dumps(bundle))
+    monkeypatch.setattr(repository, "DATASET", tmp_path)
+    for cached in (repository.patients, repository.patients_by_id, repository._patient_record):
+        cached.cache_clear()
+    try:
+        record = repository.patient_record("PAC-1", as_of="2026-02-22")
+        assert set(record["sources"]) == {"cohort", "a"}
+        assert record["snapshot_at"] == "2026-02-01"
+        assert (
+            "zesnuly" not in record["sources"]["cohort"]["text"]
+            and "C78" not in record["sources"]["cohort"]["text"]
+        )
+        assert set(repository.patient_record("PAC-1")["sources"]) == {"cohort", "a", "b", "c"}
+    finally:
+        for cached in (repository.patients, repository.patients_by_id, repository._patient_record):
+            cached.cache_clear()

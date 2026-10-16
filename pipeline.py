@@ -271,6 +271,7 @@ async def extract_patient(record: dict) -> dict:
         "patient_id": record["id"],
         "model": PATIENT_MODEL,
         "snapshot_at": record["snapshot_at"],
+        "as_of": record.get("as_of"),
         "source_ids": list(allowed),
         "complete": task["complete"] and dropped == 0,
         "dropped_citations": dropped,
@@ -344,6 +345,9 @@ def match_is_current(match: dict | None, facts_key: str, criteria_key: str) -> b
 
 async def compare(trial: dict, facts: dict, criteria: dict) -> dict:
     key = f"{facts['patient_id']}:{trial['id']}"
+    if facts.get("as_of"):
+        # Historical (benchmark) comparisons must not overwrite the current one shown in the UI.
+        key += f"@{facts['as_of']}"
     cached = storage.get("matches", key)
     if match_is_current(cached, facts["key"], criteria["key"]):
         return cached
