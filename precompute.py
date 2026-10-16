@@ -2,6 +2,7 @@
 
 Every stage is cached by its input, so reruns only do new work. --max-new caps the number of
 uncached model calls (the SDK and schema repair can each add one retry per call).
+Studies missing from the local registry cache are looked up on ClinicalTrials.gov first.
 """
 
 import argparse
@@ -16,6 +17,7 @@ from pipeline import (
     extract_trial,
     match_is_current,
     patient_input,
+    resolve_trial,
     trial_input,
 )
 from repository import patient_record, trials_by_id
@@ -38,9 +40,7 @@ def build_plan(patient_ids: list[str], trial_ids: list[str], pairs: bool, max_ne
             raise ValueError(f"Unknown study ID {identifier}")
         registry = storage.get("registry", identifier)
         if not registry or registry["state"] != "resolved":
-            raise ValueError(
-                f"Study {identifier} is not linked to the registry; sync registries in the UI first"
-            )
+            raise ValueError(f"Study {identifier} has no unique ClinicalTrials.gov match")
         criteria_keys[identifier] = trial_input(registry)["key"]
         cached = storage.get("criteria", criteria_keys[identifier]) is not None
         plan.append({"kind": "trial", "trial_id": identifier, "cached": cached})
@@ -90,6 +90,14 @@ async def execute_plan(plan: list[dict]) -> bool:
     return True
 
 
+async def resolve_missing(trial_ids: list[str]) -> None:
+    """Look up studies not yet in the local registry cache. Sends only protocol IDs to ClinicalTrials.gov."""
+    for identifier in dict.fromkeys(trial_ids):
+        trial = trials_by_id().get(identifier)
+        if trial and storage.get("registry", identifier) is None:
+            await resolve_trial(trial)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--patient", action="append", default=[], help="Patient ID (repeatable)")
@@ -101,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        asyncio.run(resolve_missing(args.trial))
         plan = build_plan(args.patient, args.trial, args.compare, args.max_new)
     except (ValueError, LookupError, OSError) as error:
         parser.error(str(error))

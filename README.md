@@ -33,7 +33,10 @@ its input, its model deployment or `pipeline.VERSION` changes.
    and must cite facts by ID. A `met`/`not_met` without a valid citation becomes `unknown`. The
    AND/OR result is evaluated in code; evidence shown in the UI is the cited facts' source spans.
 
-Recruitment status is read from the registry at display time, so a status change updates the alert
+Studies are linked to ClinicalTrials.gov on demand the first time they are screened, because the workbook
+has no eligibility text. **Data a ladění → Propojit registry** refreshes all 79 (status, sites, criteria
+text). Requests are sequential and paced, since the registry answers bursts with HTTP 429, so this takes
+a few minutes. Recruitment status is read from the registry at display time, so a status change updates the alert
 without invalidating any extraction.
 
 All outputs live in one SQLite file, `.cache/trialscreen.sqlite3`. The tables `registry`, `facts`,
@@ -57,8 +60,8 @@ sqlite3 .cache/trialscreen.sqlite3 'SELECT patient_id, trial_id, status, match_p
 ## Precompute
 
 Dry run by default. `--max-new` caps uncached model calls (default 2). The SDK and schema repair can
-each add a retry, so it is not a strict request or spending limit. Studies must first be linked to the
-registry (**Data a ladění → Propojit registry**).
+each add a retry, so it is not a strict request or spending limit. Studies not yet in the local registry
+cache are looked up on ClinicalTrials.gov first (only protocol IDs are sent).
 
 ```sh
 uv run python precompute.py --patient PATIENT_ID --trial MK-5684-004 --compare

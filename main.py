@@ -175,18 +175,14 @@ async def run_job(job: dict, request: JobRequest) -> None:
         if request.kind == "registry":
             selected = selected or trials()
             job["total"] = len(selected)
-            semaphore = asyncio.Semaphore(4)
-
-            async def refresh(trial: dict) -> None:
-                async with semaphore:
-                    try:
-                        result = await resolve_trial(trial, refresh=True)
-                        job["message"] = f"{trial['protocol']}: {result['state']}"
-                    except Exception as error:  # noqa: BLE001 - job boundary; record and continue
-                        job["errors"].append(f"{trial['protocol']}: {type(error).__name__}")
-                    job["done"] += 1
-
-            await asyncio.gather(*(refresh(trial) for trial in selected))
+            # Sequential on purpose: the public registry rate-limits parallel requests.
+            for trial in selected:
+                try:
+                    result = await resolve_trial(trial, refresh=True)
+                    job["message"] = f"{trial['protocol']}: {result['state']}"
+                except Exception as error:  # noqa: BLE001 - job boundary; record and continue
+                    job["errors"].append(f"{trial['protocol']}: {type(error).__name__}")
+                job["done"] += 1
         else:
             assert request.patient_id
             job["total"] = len(selected)

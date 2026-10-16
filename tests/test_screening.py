@@ -262,6 +262,29 @@ def test_stages_cache_by_input_and_compare_from_facts(monkeypatch):
     assert main.cached_results(RECORD) == []
 
 
+def test_registry_retries_rate_limit(monkeypatch):
+    import httpx
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        identity = {"nctId": "NCT1", "orgStudyIdInfo": {"id": "ABC-123"}}
+        return httpx.Response(
+            200, json={"studies": [{"protocolSection": {"identificationModule": identity}}]}
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real(transport=httpx.MockTransport(handler), **kwargs)
+    )
+    monkeypatch.setattr(pipeline, "REGISTRY_PACE_SECONDS", 0)
+    result = asyncio.run(pipeline.resolve_trial({"id": "ABC-123", "protocol": "ABC-123"}))
+    assert result["state"] == "resolved" and len(calls) == 2
+
+
 def test_truncated_output_is_not_repaired(monkeypatch):
     class Completions:
         calls = 0
@@ -373,7 +396,7 @@ def test_precompute_dry_run_and_budget(monkeypatch, capsys):
     with pytest.raises(ValueError, match="explicit"):
         precompute.build_plan([], [], pairs=False, max_new=2)
     storage.put("registry", "T-1", "T-1", {"state": "unresolved"})
-    with pytest.raises(ValueError, match="not linked"):
+    with pytest.raises(ValueError, match="no unique"):
         precompute.build_plan([], ["T-1"], pairs=False, max_new=2)
 
 

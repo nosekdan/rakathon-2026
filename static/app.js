@@ -156,10 +156,10 @@ async function showSource(identifier,quote='') {
 
 function openScreenDialog() {
   if(state.mode==='demo'){state.view='matches';render();return;}
-  const available=state.data.trials.filter(trial=>trial.registry?.state==='resolved');
+  const available=state.data.trials.filter(trial=>trial.registry?.state!=='unresolved');
   const relevant=trial=>state.patient.diagnoses.includes('C61')&&/prostat/i.test(trial.diagnosis)||state.patient.diagnoses.includes('C64')&&/ledvin|renální/i.test(trial.diagnosis);
   available.sort((first,second)=>Number(relevant(second))-Number(relevant(first)));
-  document.querySelector('#screen-options').innerHTML=available.length?available.map((trial,index)=>`<label class="screen-option"><input type="checkbox" name="trial" value="${escapeHtml(trial.id)}" ${index<2&&relevant(trial)?'checked':''}><span><strong>${escapeHtml(trial.protocol)}</strong>${escapeHtml(trial.title)}<small>${escapeHtml(trial.registry.status)} · ${trial.registry.site_recruiting?'Pracoviště nabírá dle registru':'Nábor na pracovišti nepotvrzen'}</small></span></label>`).join(''):'<p class="empty-note">Žádná studie zatím není propojena s registrem ClinicalTrials.gov. Otevřete Data a ladění a propojte registry.</p>';
+  document.querySelector('#screen-options').innerHTML=available.length?available.map((trial,index)=>`<label class="screen-option"><input type="checkbox" name="trial" value="${escapeHtml(trial.id)}" ${index<2&&relevant(trial)?'checked':''}><span><strong>${escapeHtml(trial.protocol)}</strong>${escapeHtml(trial.title)}<small>${trial.registry?escapeHtml(trial.registry.status)+' · '+(trial.registry.site_recruiting?'Pracoviště nabírá dle registru':'Nábor na pracovišti nepotvrzen'):'Registr bude ověřen při posouzení'}</small></span></label>`).join(''):'<p class="empty-note">Žádná studie není k dispozici.</p>';
   document.querySelector('#confirm-screen').disabled=!available.length;
   updateSelectionCount();document.querySelector('#screen-dialog').showModal();refreshIcons();
 }

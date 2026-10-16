@@ -4,6 +4,7 @@ Each stage is keyed by a hash of exactly what it sends to the model, so it rerun
 input (or the model/pipeline version) changes.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -38,6 +39,9 @@ VERSION = "screen-v2"
 REGISTRY_API = "https://clinicaltrials.gov/api/v2/studies"
 # Substrings of local site names; "Homolka" appears declined as "Na Homolce" in registry listings.
 SITE_TOKENS = ("motol", "homol")
+# ClinicalTrials.gov answers bursts with HTTP 429, so requests are paced and retried with backoff.
+REGISTRY_PACE_SECONDS = 1.3
+REGISTRY_RETRIES = 5
 Schema = TypeVar("Schema", bound=BaseModel)
 
 SYSTEM = (
@@ -159,7 +163,13 @@ async def resolve_trial(trial: dict, refresh: bool = False) -> dict:
     }
 
     async def search(client: httpx.AsyncClient, term: str) -> list[dict]:
-        response = await client.get(REGISTRY_API, params={"query.term": term, "pageSize": 20})
+        for attempt in range(REGISTRY_RETRIES):
+            await asyncio.sleep(REGISTRY_PACE_SECONDS)
+            response = await client.get(REGISTRY_API, params={"query.term": term, "pageSize": 20})
+            if response.status_code not in (429, 503) or attempt == REGISTRY_RETRIES - 1:
+                break
+            retry_after = response.headers.get("Retry-After", "")
+            await asyncio.sleep(int(retry_after) if retry_after.isdigit() else 5 * 2**attempt)
         response.raise_for_status()
         return [
             study
