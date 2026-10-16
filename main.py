@@ -2,33 +2,33 @@ import asyncio
 import secrets
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from openai import APIError
 from pydantic import BaseModel, Field
 
+import storage
 from demo import demo_data
 from pipeline import (
     MODEL,
     PATIENT_MODEL,
     TRIAL_MODEL,
-    VERSION,
-    attach_public_source,
     compare,
     extract_patient,
     extract_trial,
+    match_is_current,
+    patient_input,
     resolve_trial,
-    sync_registry,
+    trial_input,
 )
-from repository import get_trial, load_cache, patient_record, patients, save_cache, trials
+from repository import patient_record, patients, patients_by_id, trials, trials_by_id
+from screening import TrialExtraction, badge
 
 app = FastAPI(title="TrialScreen", docs_url="/api/docs")
 STATIC = Path(__file__).parent / "static"
+MAX_JOBS = 20
 jobs: dict[str, dict] = {}
 job_tasks: set[asyncio.Task] = set()
-pipeline_lock = asyncio.Lock()
 
 
 @app.middleware("http")
@@ -48,40 +48,71 @@ async def local_security(request: Request, call_next):
     return response
 
 
-def public_trial(trial: dict) -> dict:
-    registry = load_cache("registry", trial["id"])
-    return {
-        **trial,
-        "registry": {key: value for key, value in registry.items() if key not in ("sources", "identity")}
-        if registry
-        else None,
-    }
+def public_registry(registry: dict | None) -> dict | None:
+    return {key: value for key, value in registry.items() if key != "sources"} if registry else None
+
+
+def load_patient(patient_id: str) -> dict:
+    try:
+        return patient_record(patient_id)
+    except (LookupError, FileNotFoundError):
+        raise HTTPException(404, "Patient not found") from None
 
 
 def cached_results(record: dict) -> list[dict]:
+    """Saved comparisons whose facts and criteria still match the current inputs, assembled for the UI."""
+    facts = storage.get("facts", patient_input(record)["key"])
+    if not facts:
+        return []
     results = []
-    for trial in trials():
-        result = load_cache("matches", record["id"] + ":" + trial["id"])
-        registry = load_cache("registry", trial["id"])
-        if (
-            result
-            and registry
-            and result.get("patient_version") == record["version"]
-            and result.get("registry_version") == registry.get("version")
-            and result.get("pipeline_version") == VERSION
-            and result.get("model") == MODEL
-            and result.get("patient_model", result.get("model")) == PATIENT_MODEL
-            and result.get("trial_model", result.get("model")) == TRIAL_MODEL
-        ):
-            results.append({key: value for key, value in result.items() if key != "sources"})
+    for match in storage.by_owner("matches", record["id"]):
+        registry = storage.get("registry", match["trial_id"])
+        if match["trial_id"] not in trials_by_id() or not registry or registry["state"] != "resolved":
+            continue
+        criteria = storage.get("criteria", trial_input(registry)["key"])
+        if not criteria or not match_is_current(match, facts["key"], criteria["key"]):
+            continue
+        extraction = TrialExtraction.model_validate(criteria)
+        # Recruitment can change without invalidating the comparison, so the alert is decided at read time.
+        alert = badge(
+            match["summary"]["status"],
+            criteria_complete=extraction.complete,
+            facts_complete=facts["complete"],
+            recruiting=registry["status"] == "RECRUITING",
+            site_recruiting=registry["site_recruiting"],
+            deceased=record["deceased"],
+        )
+        results.append(
+            {
+                **{
+                    key: match[key]
+                    for key in ("patient_id", "trial_id", "assessed_at", "decisions", "future_watch")
+                },
+                "model": MODEL,
+                "snapshot_at": facts["snapshot_at"],
+                "summary": {**match["summary"], "badge": alert},
+                "criteria": {key: criteria[key] for key in ("criteria", "logic", "complete", "limitations")},
+                "registry": public_registry(registry),
+                "patient_facts": {"source_ids": facts["source_ids"], "complete": facts["complete"]},
+                "limitations": ["Posouzení veřejných kritérií, nikoli potvrzení zařazení do studie."]
+                + criteria["limitations"]
+                + facts["limitations"]
+                + (
+                    []
+                    if facts["complete"]
+                    else ["Posouzen byl výběr záznamů; úplnost dokumentace není potvrzena."]
+                ),
+            }
+        )
     return results
 
 
 @app.get("/api/bootstrap")
 def bootstrap():
+    registries = storage.rows("registry")
     return {
         "patients": [{key: value for key, value in item.items() if key != "raw"} for item in patients()],
-        "trials": [public_trial(item) for item in trials()],
+        "trials": [{**trial, "registry": public_registry(registries.get(trial["id"]))} for trial in trials()],
         "model": MODEL,
         "models": {"patient": PATIENT_MODEL, "trial": TRIAL_MODEL, "comparison": MODEL},
         "dataset": {"name": "Rakathon / FN Motol a Homolka", "dates_shifted": True, "pseudonymized": True},
@@ -96,10 +127,7 @@ def get_demo():
 
 @app.get("/api/patients/{patient_id}")
 def get_patient(patient_id: str):
-    try:
-        record = patient_record(patient_id)
-    except (StopIteration, FileNotFoundError):
-        raise HTTPException(404, "Patient not found") from None
+    record = load_patient(patient_id)
     return {
         **{key: value for key, value in record.items() if key not in ("raw", "sources")},
         "sources": [
@@ -112,25 +140,26 @@ def get_patient(patient_id: str):
 
 @app.get("/api/patients/{patient_id}/sources/{source_id}")
 def get_source(patient_id: str, source_id: str, trial_id: str | None = None):
-    try:
-        record = patient_record(patient_id)
-        source = record["sources"].get(source_id)
-        if not source and trial_id:
-            registry = load_cache("registry", trial_id) or {}
-            source = registry.get("sources", {}).get(source_id)
-        if not source:
-            raise HTTPException(404, "Source not found")
-        return source
-    except StopIteration:
-        raise HTTPException(404, "Patient not found") from None
+    source = load_patient(patient_id)["sources"].get(source_id)
+    if source is None and trial_id:
+        source = (storage.get("registry", trial_id) or {}).get("sources", {}).get(source_id)
+    if source is None:
+        raise HTTPException(404, "Source not found")
+    return source
 
 
 @app.get("/api/trials/{trial_id}")
 def get_trial_detail(trial_id: str):
-    try:
-        return {**public_trial(get_trial(trial_id)), "registry": load_cache("registry", trial_id)}
-    except StopIteration:
-        raise HTTPException(404, "Trial not found") from None
+    trial = trials_by_id().get(trial_id)
+    if trial is None:
+        raise HTTPException(404, "Trial not found")
+    registry = storage.get("registry", trial_id)
+    resolved = registry and registry["state"] == "resolved"
+    return {
+        **trial,
+        "registry": registry,
+        "criteria": storage.get("criteria", trial_input(registry)["key"]) if resolved else None,
+    }
 
 
 class JobRequest(BaseModel):
@@ -139,50 +168,54 @@ class JobRequest(BaseModel):
     trial_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
-async def run_job(job_id: str, request: JobRequest):
-    job = jobs[job_id]
-    async with pipeline_lock:
-        job.update(state="running", message="Spouštění")
-        try:
-            if request.kind == "registry":
-                selected = (
-                    [get_trial(identifier) for identifier in request.trial_ids]
-                    if request.trial_ids
-                    else trials()
-                )
-                job["total"] = len(selected)
+async def run_job(job: dict, request: JobRequest) -> None:
+    job.update(state="running", message="Spouštění")
+    try:
+        selected = [trials_by_id()[identifier] for identifier in request.trial_ids]
+        if request.kind == "registry":
+            selected = selected or trials()
+            job["total"] = len(selected)
+            semaphore = asyncio.Semaphore(4)
 
-                def progress(protocol, state):
+            async def refresh(trial: dict) -> None:
+                async with semaphore:
+                    try:
+                        result = await resolve_trial(trial, refresh=True)
+                        job["message"] = f"{trial['protocol']}: {result['state']}"
+                    except Exception as error:  # noqa: BLE001 - job boundary; record and continue
+                        job["errors"].append(f"{trial['protocol']}: {type(error).__name__}")
                     job["done"] += 1
-                    job["message"] = f"{protocol}: {state}"
 
-                await sync_registry(selected, progress)
-            else:
-                record = patient_record(request.patient_id)
-                selected = [get_trial(identifier) for identifier in request.trial_ids]
-                job["total"] = len(selected)
-                job["message"] = "Extrakce údajů z dokumentace"
-                facts = await extract_patient(record)
-                for trial in selected:
+            await asyncio.gather(*(refresh(trial) for trial in selected))
+        else:
+            assert request.patient_id
+            job["total"] = len(selected)
+            job["message"] = "Extrakce údajů z dokumentace"
+            record = await asyncio.to_thread(patient_record, request.patient_id)
+            facts = await extract_patient(record)
+            for trial in selected:
+                try:
                     job["message"] = f"{trial['protocol']}: ověření registru"
                     registry = await resolve_trial(trial)
-                    if not registry.get("clinical_eu_verified"):
-                        job["errors"].append(
-                            f"{trial['protocol']}: chybí ověřené propojení ClinicalTrials.eu"
-                        )
-                        job["done"] += 1
+                    if registry["state"] != "resolved":
+                        job["errors"].append(f"{trial['protocol']}: studie není propojena s registrem")
                         continue
                     job["message"] = f"{trial['protocol']}: extrakce kritérií"
-                    criteria = await extract_trial(registry)
-                    job["message"] = f"{trial['protocol']}: porovnání s dokumentací"
-                    await compare(record, trial, registry, criteria, facts)
+                    criteria = await extract_trial(trial, registry)
+                    job["message"] = f"{trial['protocol']}: porovnání"
+                    await compare(trial, facts, criteria)
+                except Exception as error:  # noqa: BLE001 - job boundary; record and continue
+                    # Error messages can echo model output, so only the type is surfaced.
+                    job["errors"].append(f"{trial['protocol']}: zpracování selhalo ({type(error).__name__})")
+                finally:
                     job["done"] += 1
-            job.update(state="done", message="Dokončeno" if not job["errors"] else "Dokončeno s upozorněním")
-        except (httpx.HTTPError, APIError, ValueError, OSError, LookupError, RuntimeError) as error:
-            job.update(
-                state="error",
-                message=f"Zpracování selhalo ({type(error).__name__}). Zkontrolujte připojení, konfiguraci a zdrojové podklady.",
-            )
+        job.update(state="done", message="Dokončeno s upozorněním" if job["errors"] else "Dokončeno")
+    except Exception as error:  # noqa: BLE001 - job boundary; record and continue
+        job.update(
+            state="error",
+            message=f"Zpracování selhalo ({type(error).__name__}). "
+            "Zkontrolujte připojení, konfiguraci a zdrojové podklady.",
+        )
 
 
 @app.post("/api/jobs")
@@ -193,12 +226,14 @@ async def create_job(request: JobRequest):
         raise HTTPException(409, "Another job is already running")
     if request.kind == "screen" and (not request.patient_id or not request.trial_ids):
         raise HTTPException(400, "Choose a patient and at least one trial")
-    if request.patient_id and not any(item["id"] == request.patient_id for item in patients()):
+    if request.patient_id and request.patient_id not in patients_by_id():
         raise HTTPException(404, "Patient not found")
-    if any(not any(item["id"] == identifier for item in trials()) for identifier in request.trial_ids):
+    if any(identifier not in trials_by_id() for identifier in request.trial_ids):
         raise HTTPException(404, "Trial not found")
+    for finished in list(jobs)[: max(0, len(jobs) - MAX_JOBS + 1)]:
+        del jobs[finished]
     job_id = secrets.token_hex(8)
-    jobs[job_id] = {
+    job = {
         "id": job_id,
         "state": "queued",
         "kind": request.kind,
@@ -207,10 +242,11 @@ async def create_job(request: JobRequest):
         "message": "Čeká na zpracování",
         "errors": [],
     }
-    task = asyncio.create_task(run_job(job_id, request))
+    jobs[job_id] = job
+    task = asyncio.create_task(run_job(job, request))
     job_tasks.add(task)
     task.add_done_callback(job_tasks.discard)
-    return jobs[job_id]
+    return job
 
 
 @app.get("/api/jobs/{job_id}")
@@ -218,25 +254,6 @@ def get_job(job_id: str):
     if job_id not in jobs:
         raise HTTPException(404, "Job not found")
     return jobs[job_id]
-
-
-class PublicSourceImport(BaseModel):
-    trial_id: str
-    url: str
-    text: str = Field(min_length=100, max_length=200000)
-
-
-@app.post("/api/registry/import")
-def import_public_source(payload: PublicSourceImport):
-    registry = load_cache("registry", payload.trial_id)
-    if not registry or not registry.get("identity"):
-        raise HTTPException(400, "Resolve the registry identifier first")
-    try:
-        attach_public_source(registry, payload.url, payload.text)
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from None
-    save_cache("registry", payload.trial_id, registry)
-    return {"verified": True, "nct_id": registry["nct_id"]}
 
 
 @app.get("/")

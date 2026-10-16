@@ -1,215 +1,108 @@
+import asyncio
+import re
+import sqlite3
+
 import pytest
 
+import main
+import pipeline
+import precompute
+import storage
+from repository import VITAL_PATTERNS, select_sources, trial_slug
 from screening import (
+    Comparison,
     Criterion,
+    Decision,
     Evidence,
+    Fact,
     Logic,
+    PatientExtraction,
     TrialExtraction,
+    badge,
     evaluate_logic,
+    future_watch,
     locate_evidence,
     summarize,
     validate_logic,
+    verify_decisions,
 )
+
+
+@pytest.fixture(autouse=True)
+def database(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "PATH", tmp_path / "test.sqlite3")
 
 
 def leaf(identifier):
     return Logic(op="ref", criterion_id=identifier)
 
 
-def test_structured_outputs_use_separate_databases_and_import_legacy_cache(tmp_path, monkeypatch):
-    import json
-    import sqlite3
+def criterion(identifier, trigger="none"):
+    return Criterion(
+        id=identifier,
+        requirement=identifier,
+        role="inclusion",
+        source=Evidence(source_id="registry", quote=identifier),
+        trigger=trigger,
+    )
 
-    import repository
 
-    monkeypatch.setattr(repository, "CACHE", tmp_path)
-    payload = {"patient_id": "synthetic", "model": "test", "facts": [{"name": "age", "value": "64"}]}
-    legacy = tmp_path / "facts" / f"{repository.fingerprint('legacy')}.json"
-    legacy.parent.mkdir()
-    legacy.write_text(json.dumps(payload))
-    assert repository.load_cache("facts", "legacy") == payload
-    repository.save_cache("criteria", "study", {"criteria": [], "logic": {"op": "all"}})
-    repository.save_cache("matches", "pair", {"summary": {"status": "missing"}})
-    assert {path.name for path in tmp_path.glob("*.sqlite3")} == {
-        "patients.sqlite3",
-        "studies.sqlite3",
-        "matches.sqlite3",
-    }
-    connection = sqlite3.connect(tmp_path / "patients.sqlite3")
-    try:
-        assert connection.execute("SELECT patient_id, name, value FROM patient_facts").fetchone() == (
-            "synthetic",
-            "age",
-            "64",
-        )
-    finally:
-        connection.close()
-    repository.save_cache("facts", "legacy", {**payload, "facts": []})
-    assert repository.load_cache("facts", "legacy")["facts"] == []
+RECORD = {
+    "id": "synthetic",
+    "snapshot_at": "2025-01-01",
+    "deceased": False,
+    "sources": {
+        "cohort": {"id": "cohort", "kind": "demographics", "text": "vek: 64", "date": None},
+        "note": {
+            "id": "note",
+            "kind": "DocumentReference",
+            "text": "ECOG 1.  Stabilni.",
+            "date": "2025-01-01",
+        },
+        "hb-new": {"id": "hb-new", "kind": "Observation", "text": "Hb 120", "date": "2025-01-01"},
+        "hb-old": {"id": "hb-old", "kind": "Observation", "text": "Hb 110", "date": "2024-01-01"},
+    },
+    "latest_labs": [{"source_id": "hb-new"}],
+}
+REGISTRY = {
+    "state": "resolved",
+    "nct_id": "NCT00000000",
+    "status": "RECRUITING",
+    "site_recruiting": True,
+    "sources": {"registry": {"id": "registry", "text": "Age >= 18\nECOG 0-1"}},
+}
+TRIAL = {"id": "T-1", "protocol": "T-1"}
+
+
+def fake_model(responses):
+    async def model_json(schema, deployment, instruction, payload):
+        return responses[schema]
+
+    return model_json
+
+
+# Pure logic
 
 
 def test_missing_is_not_negative_or_positive():
-    logic = Logic(op="all", children=[leaf("age"), leaf("lab")])
-    assert evaluate_logic(logic, {"age": "met", "lab": "missing"}) == "missing"
-
-
-def test_precompute_is_bounded_and_dry_run_by_default(monkeypatch, capsys):
-    import precompute
-
-    monkeypatch.setattr(precompute, "patients", lambda: [{"id": "synthetic"}])
-    monkeypatch.setattr(precompute, "patient_version", lambda patient: "v1")
-    monkeypatch.setattr(precompute, "load_cache", lambda namespace, key: None)
-
-    async def forbidden(*args, **kwargs):
-        pytest.fail("Dry run must not invoke extraction")
-
-    monkeypatch.setattr(precompute, "execute_plan", forbidden)
-    assert precompute.main(["--patient", "synthetic"]) == 0
-    assert '"new_extractions": 1' in capsys.readouterr().out
-    with pytest.raises(ValueError, match="exceeds"):
-        precompute.build_plan(["synthetic"], [], max_new=0)
-    with pytest.raises(ValueError, match="Pilot limit"):
-        precompute.build_plan([str(index) for index in range(6)], [])
-    with pytest.raises(ValueError, match="explicit"):
-        precompute.build_plan([], [])
-    monkeypatch.setattr(precompute, "trials", lambda: [{"id": "T001"}])
-    with pytest.raises(ValueError, match="verified"):
-        precompute.build_plan([], ["T001"])
-
-
-def test_precompute_reuses_caches_and_enriches_metadata(tmp_path, monkeypatch):
-    import asyncio
-
-    import pipeline
-    import precompute
-    import repository
-
-    monkeypatch.setattr(repository, "CACHE", tmp_path)
-    record = {"id": "synthetic", "version": "patient-v1", "sources": {}}
-    registry = {"version": "trial-v1", "nct_id": "NCT00000000", "clinical_eu_verified": True}
-    facts_key = f"{pipeline.PATIENT_MODEL}:{pipeline.VERSION}:synthetic:patient-v1"
-    criteria_key = f"{pipeline.TRIAL_MODEL}:{pipeline.VERSION}:trial-v1"
-    repository.save_cache("facts", facts_key, {"facts": [], "dropped_citations": 0})
-    repository.save_cache("registry", "T001", registry)
-    extraction = TrialExtraction(criteria=[], logic=Logic(op="all"), complete=False)
-    repository.save_cache("criteria", criteria_key, extraction.model_dump())
-    monkeypatch.setattr(precompute, "patients", lambda: [record])
-    monkeypatch.setattr(precompute, "trials", lambda: [{"id": "T001"}])
-    monkeypatch.setattr(precompute, "patient_version", lambda patient: patient["version"])
-    monkeypatch.setattr(precompute, "patient_record", lambda identifier: record)
-    monkeypatch.setattr(precompute, "select_sources", lambda record: ([], False))
-
-    async def forbidden(*args, **kwargs):
-        pytest.fail("Cached extraction must not invoke the model or compare")
-
-    monkeypatch.setattr(pipeline, "model_json", forbidden)
-    monkeypatch.setattr(pipeline, "compare", forbidden)
-    plan = precompute.build_plan(["synthetic"], ["T001"], max_new=0)
-    report = asyncio.run(precompute.execute_plan(plan))
-    assert report["comparisons"] == 0
-    assert all(item["cache_hit"] and item["state"] == "done" for item in report["items"])
-    assert repository.load_cache("facts", facts_key)["patient_id"] == "synthetic"
-    assert repository.load_cache("criteria", criteria_key)["nct_id"] == "NCT00000000"
-    assert repository.load_cache("criteria", criteria_key)["model"] == pipeline.TRIAL_MODEL
-
-
-def test_new_patient_extraction_has_identity_and_verified_evidence(tmp_path, monkeypatch):
-    import asyncio
-
-    import pipeline
-    import repository
-    from screening import Fact, PatientExtraction
-
-    monkeypatch.setattr(repository, "CACHE", tmp_path)
-    source = {"id": "note", "text": "ECOG 1"}
-    record = {"id": "synthetic", "version": "v1", "snapshot_at": "2025-01-01"}
-    monkeypatch.setattr(pipeline, "select_sources", lambda record: ([source], True))
-
-    async def model_json(schema, instruction, payload):
-        return PatientExtraction(
-            facts=[
-                Fact(
-                    name="ECOG",
-                    value="1",
-                    date="2025-01-01",
-                    evidence=Evidence(source_id="note", quote="ECOG 1"),
-                )
-            ]
-        )
-
-    monkeypatch.setattr(pipeline, "model_json", model_json)
-    result = asyncio.run(pipeline.extract_patient(record))
-    assert result["patient_id"] == "synthetic"
-    assert result["model"] == pipeline.PATIENT_MODEL
-    assert result["facts"][0]["evidence"]["start"] == 0
-    assert result["dropped_citations"] == 0
-
-
-def test_precompute_stops_on_error_and_preserves_input_metrics(tmp_path, monkeypatch):
-    import asyncio
-
-    import precompute
-    import repository
-
-    monkeypatch.setattr(repository, "CACHE", tmp_path)
-    monkeypatch.setattr(precompute, "patient_record", lambda identifier: {"version": "v1"})
-    monkeypatch.setattr(precompute, "select_sources", lambda record: ([{"text": "ECOG 1"}], False))
-
-    async def failed(record):
-        raise ValueError("Synthetic failure containing details that must not be logged")
-
-    monkeypatch.setattr(precompute, "extract_patient", failed)
-    item = {"kind": "patient", "id": "synthetic", "version": "v1", "cache_hit": False}
-    report = asyncio.run(precompute.execute_plan([item, item]))
-    assert len(report["items"]) == 1
-    assert report["items"][0]["error_type"] == "ValueError"
-    assert report["items"][0]["selected_characters"] == 6
-    assert "Synthetic failure" not in str(report)
-
-
-def test_cached_matches_require_all_stage_models(monkeypatch):
-    import main
-
-    monkeypatch.setattr(main, "MODEL", "comparison")
-    monkeypatch.setattr(main, "PATIENT_MODEL", "patient")
-    monkeypatch.setattr(main, "TRIAL_MODEL", "study")
-    monkeypatch.setattr(main, "trials", lambda: [{"id": "T001"}])
-    result = {
-        "patient_version": "p1",
-        "registry_version": "t1",
-        "pipeline_version": main.VERSION,
-        "model": "comparison",
-        "patient_model": "patient",
-        "trial_model": "study",
-    }
-    monkeypatch.setattr(
-        main, "load_cache", lambda namespace, key: result if namespace == "matches" else {"version": "t1"}
+    assert (
+        evaluate_logic(Logic(op="all", children=[leaf("A"), leaf("B")]), {"A": "met", "B": "missing"})
+        == "missing"
     )
-    record = {"id": "synthetic", "version": "p1"}
-    assert len(main.cached_results(record)) == 1
-    monkeypatch.setattr(main, "PATIENT_MODEL", "different")
-    assert main.cached_results(record) == []
-    monkeypatch.setattr(main, "PATIENT_MODEL", "patient")
-    monkeypatch.setattr(main, "TRIAL_MODEL", "different")
-    assert main.cached_results(record) == []
 
 
 def test_alternative_does_not_exclude():
-    logic = Logic(op="any", children=[leaf("A"), leaf("B")])
-    assert evaluate_logic(logic, {"A": "not_met", "B": "met"}) == "met"
+    assert (
+        evaluate_logic(Logic(op="any", children=[leaf("A"), leaf("B")]), {"A": "not_met", "B": "met"})
+        == "met"
+    )
 
 
 def test_ambiguous_evidence_requires_review():
-    logic = Logic(op="all", children=[leaf("A"), leaf("B")])
-    assert evaluate_logic(logic, {"A": "missing", "B": "unknown"}) == "unknown"
-
-
-def test_citations_are_exact_and_local():
-    sources = {"doc": {"text": "Hb 105 g/l."}}
-    result = locate_evidence(Evidence(source_id="doc", quote="105 g/l"), sources)
-    assert result["start"] == 3
-    assert result["end"] == 10
-    assert locate_evidence(Evidence(source_id="doc", quote="Hb 150"), sources) is None
+    assert (
+        evaluate_logic(Logic(op="all", children=[leaf("A"), leaf("B")]), {"A": "missing", "B": "unknown"})
+        == "unknown"
+    )
 
 
 def test_unrepresented_criteria_rejected():
@@ -217,70 +110,295 @@ def test_unrepresented_criteria_rejected():
         validate_logic(leaf("A"), {"A", "B"})
 
 
-def test_incomplete_or_closed_trial_never_badged():
+def test_citations_are_exact_and_tolerate_whitespace():
+    sources = {"doc": {"text": "Hb  105\ng/l."}}
+    assert locate_evidence(Evidence(source_id="doc", quote="Hb"), sources)["start"] == 0
+    found = locate_evidence(Evidence(source_id="doc", quote="105 g/l"), sources)
+    assert (found["start"], found["end"], found["quote"]) == (4, 11, "105\ng/l")
+    assert locate_evidence(Evidence(source_id="doc", quote="Hb 150"), sources) is None
+    assert locate_evidence(Evidence(source_id="other", quote="Hb"), sources) is None
+
+
+def test_decisions_must_cite_existing_facts():
+    facts = {"F1": {"id": "F1", "evidence": {"source_id": "note", "quote": "ECOG 1"}}}
+    decisions = [
+        Decision(criterion_id="A", status="met", reason="ok", fact_ids=["F1"]),
+        Decision(criterion_id="B", status="met", reason="no citation"),
+        Decision(criterion_id="C", status="not_met", reason="bad id", fact_ids=["F9"]),
+        Decision(criterion_id="D", status="missing", reason="absent"),
+        Decision(criterion_id="E", status="met", reason="dup", fact_ids=["F1"]),
+        Decision(criterion_id="E", status="not_met", reason="dup", fact_ids=["F1"]),
+    ]
+    result = verify_decisions([criterion(c) for c in "ABCDEF"], decisions, facts)
+    assert [item["status"] for item in result] == [
+        "met",
+        "unknown",
+        "unknown",
+        "missing",
+        "unknown",
+        "unknown",
+    ]
+    assert result[0]["evidence"] == [facts["F1"]["evidence"]]
+
+
+def test_badge_requires_complete_inputs_and_local_recruitment():
+    ready = {"criteria_complete": True, "facts_complete": True, "recruiting": True, "site_recruiting": True}
+    ready["deceased"] = False
+    assert badge("met", **ready)
+    assert not badge("unknown", **ready)
+    for field in ("criteria_complete", "facts_complete", "recruiting", "site_recruiting"):
+        assert not badge("met", **{**ready, field: False})
+    assert not badge("met", **{**ready, "deceased": True})
+
+
+def test_future_watch_only_for_single_trigger_blocker():
+    extraction = TrialExtraction(
+        criteria=[criterion("A"), criterion("P", "progression")],
+        logic=Logic(op="all", children=[leaf("A"), leaf("P")]),
+        complete=True,
+    )
+    blocked = [{"criterion_id": "A", "status": "met"}, {"criterion_id": "P", "status": "not_met"}]
+    assert future_watch(extraction, blocked)[0]["trigger"] == "progression"
+    assert future_watch(extraction, [{**blocked[0], "status": "missing"}, blocked[1]]) == []
+    assert summarize(extraction, blocked)["counts"] == {"met": 1, "not_met": 1, "unknown": 0, "missing": 0}
+
+
+# Dataset parsing
+
+
+def test_superseded_labs_do_not_make_selection_incomplete():
+    selected, complete = select_sources(RECORD)
+    assert complete
+    assert {source["id"] for source in selected} == {"cohort", "note", "hb-new"}
+    assert not select_sources(RECORD, budget=10)[1]
+
+
+def test_ecog_pattern_needs_word_boundary():
+    assert re.search(VITAL_PATTERNS["ecog"], "ECOG: 1", re.IGNORECASE).group(1) == "1"
+    assert re.search(VITAL_PATTERNS["ecog"], "WHO PS 2", re.IGNORECASE).group(1) == "2"
+    assert re.search(VITAL_PATTERNS["ecog"], "caps 1 tbl", re.IGNORECASE) is None
+    assert re.search(VITAL_PATTERNS["ecog"], "WHO 2016", re.IGNORECASE) is None
+
+
+def test_trial_ids_derive_from_protocol():
+    assert trial_slug("MK-5684-004") == "MK-5684-004"
+    assert trial_slug("peak-1 (CGT9486)") == "PEAK-1-CGT9486"
+
+
+def test_local_sites_match_declined_names():
+    locations = [{"facility": "Nemocnice Na Homolce"}, {"facility": "FN v Motole"}, {"facility": "Brno"}]
+    assert len(pipeline.local_sites(locations)) == 2
+
+
+# Stages
+
+
+def test_stages_cache_by_input_and_compare_from_facts(monkeypatch):
     extraction = TrialExtraction(
         criteria=[
             Criterion(
-                id="A",
+                id="age",
                 requirement="Age >= 18",
                 role="inclusion",
-                source=Evidence(source_id="protocol", quote="Age >= 18"),
-            )
+                source=Evidence(source_id="registry", quote="Age >= 18"),
+            ),
+            Criterion(
+                id="ecog",
+                requirement="ECOG 0-1",
+                role="inclusion",
+                source=Evidence(source_id="registry", quote="ECOG 0 - 1"),
+            ),
         ],
-        logic=leaf("A"),
-        complete=False,
+        logic=Logic(op="all", children=[leaf("age"), leaf("ecog")]),
+        complete=True,
     )
-    decisions = [{"criterion_id": "A", "status": "met"}]
-    assert not summarize(extraction, decisions, "RECRUITING")["badge"]
-    extraction.complete = True
-    assert not summarize(extraction, decisions, "COMPLETED")["badge"]
-    assert summarize(extraction, decisions, "RECRUITING")["badge"]
+    patient = PatientExtraction(
+        facts=[
+            Fact(name="ECOG", value="1", evidence=Evidence(source_id="note", quote="ECOG 1. Stabilni.")),
+            Fact(name="invented", value="x", evidence=Evidence(source_id="note", quote="not in text")),
+        ]
+    )
+    comparison = Comparison(
+        decisions=[
+            Decision(criterion_id="age", status="missing", reason="chybí", action="doplnit"),
+            Decision(criterion_id="ecog", status="met", reason="ECOG 1", fact_ids=["F1"]),
+        ]
+    )
+    calls = []
+
+    async def model_json(schema, deployment, instruction, payload):
+        calls.append((schema, payload))
+        return {PatientExtraction: patient, TrialExtraction: extraction, Comparison: comparison}[schema]
+
+    monkeypatch.setattr(pipeline, "model_json", model_json)
+
+    async def run():
+        facts = await pipeline.extract_patient(RECORD)
+        criteria = await pipeline.extract_trial(TRIAL, REGISTRY)
+        return facts, criteria, await pipeline.compare(TRIAL, facts, criteria)
+
+    facts, criteria, match = asyncio.run(run())
+    assert [fact["id"] for fact in facts["facts"]] == ["F1"]
+    assert facts["facts"][0]["evidence"]["quote"] == "ECOG 1.  Stabilni."
+    assert facts["dropped_citations"] == 1 and not facts["complete"]
+    # The unverifiable criterion quote is kept, not dropped, and marks the extraction incomplete.
+    assert criteria["criteria"][1]["source"]["unverified"] and not criteria["complete"]
+    assert match["decisions"][1]["evidence"] == [facts["facts"][0]["evidence"]]
+    assert match["summary"]["status"] == "missing"
+    compare_payload = calls[2][1]
+    assert list(compare_payload) == ["snapshot_at", "patient_facts", "criteria"]
+    assert "sources" not in compare_payload
+
+    asyncio.run(run())
+    assert len(calls) == 3, "cached stages must not call the model again"
+
+    monkeypatch.setattr(main, "trials_by_id", lambda: {"T-1": TRIAL})
+    storage.put("registry", "T-1", "T-1", REGISTRY)
+    [view] = main.cached_results(RECORD)
+    assert view["summary"]["badge"] is False
+    assert "sources" not in view["registry"]
+    monkeypatch.setattr(pipeline, "MODEL", "other")
+    monkeypatch.setattr(main, "match_is_current", pipeline.match_is_current)
+    assert main.cached_results(RECORD) == []
 
 
-def test_real_import_preserves_identifiers_and_sources():
-    from repository import DATASET, ROOT, patient_record, patients, select_sources, trials
+def test_truncated_output_is_not_repaired(monkeypatch):
+    class Completions:
+        calls = 0
 
-    if DATASET is None or not any(ROOT.glob("*.xlsx")):
-        pytest.skip("Local private dataset and study workbook required")
+        async def create(self, **kwargs):
+            Completions.calls += 1
+            message = type("Message", (), {"content": "{"})
+            return type(
+                "Response",
+                (),
+                {"choices": [type("Choice", (), {"finish_reason": "length", "message": message})]},
+            )
 
-    cohort = patients()
-    assert len(cohort) == 1830
-    assert len(trials()) == 79
-    patient = next(item for item in cohort if "C61" in item["diagnoses"] and not item["deceased"])
-    record = patient_record(patient["id"])
-    assert record["sources"]["cohort"]["text"].startswith("pseudonym:")
-    selected, complete = select_sources(record)
-    assert selected
-    assert isinstance(complete, bool)
-    for vital in record["vitals"].values():
-        text = record["sources"][vital["source_id"]]["text"]
-        assert text[vital["start"] : vital["end"]] == vital["quote"]
+    class Client:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": Completions()})
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setenv("API_KEY", "test")
+    monkeypatch.setattr(pipeline, "AsyncOpenAI", Client)
+    with pytest.raises(ValueError, match="truncated"):
+        asyncio.run(pipeline.model_json(Comparison, "model", "", {}))
+    assert Completions.calls == 1
 
 
-def test_public_pages_require_a_matching_registry_identifier():
-    from pipeline import public_source_verified
+def test_storage_views_expose_rows():
+    storage.put("facts", "k", "p1", {"model": "m", "facts": [{"id": "F1", "name": "ECOG", "value": "1"}]})
+    storage.put(
+        "matches", "p1:T", "p1", {"trial_id": "T", "summary": {"status": "met", "match_percent": 100}}
+    )
+    assert storage.by_owner("matches", "p1")[0]["trial_id"] == "T"
+    with sqlite3.connect(storage.PATH) as connection:
+        assert connection.execute("SELECT patient_id, fact_id, name FROM patient_facts").fetchone() == (
+            "p1",
+            "F1",
+            "ECOG",
+        )
+        assert connection.execute("SELECT trial_id, status FROM pair_results").fetchone() == ("T", "met")
 
-    identity = {"nctId": "NCT05239728", "secondaryIdInfos": [{"id": "2023-505023-31-00"}]}
-    assert public_source_verified("EU CT: 2023-505023-31-00", identity)
-    assert public_source_verified("Registry2023-505023-31-00Location", identity)
-    assert not public_source_verified("A similar title. NCT00000000", identity)
+
+# Jobs, API, CLI
+
+
+def test_unexpected_job_error_reaches_terminal_state(monkeypatch):
+    async def boom(record):
+        raise TypeError("unexpected")
+
+    monkeypatch.setattr(main, "extract_patient", boom)
+    monkeypatch.setattr(main, "patient_record", lambda identifier: RECORD)
+    monkeypatch.setattr(main, "trials_by_id", lambda: {"T-1": TRIAL})
+    job = {"state": "queued", "done": 0, "total": 0, "message": "", "errors": []}
+    asyncio.run(main.run_job(job, main.JobRequest(kind="screen", patient_id="synthetic", trial_ids=["T-1"])))
+    assert job["state"] == "error"
+
+
+def test_one_failing_trial_does_not_stop_the_job(monkeypatch):
+    async def facts(record):
+        return {}
+
+    async def resolve(trial):
+        if trial["id"] == "BAD":
+            raise RuntimeError
+        return {"state": "unresolved"}
+
+    monkeypatch.setattr(main, "extract_patient", facts)
+    monkeypatch.setattr(main, "resolve_trial", resolve)
+    monkeypatch.setattr(main, "patient_record", lambda identifier: RECORD)
+    monkeypatch.setattr(main, "trials_by_id", lambda: {"BAD": {"id": "BAD", "protocol": "BAD"}, "T-1": TRIAL})
+    job = {"state": "queued", "done": 0, "total": 0, "message": "", "errors": []}
+    asyncio.run(
+        main.run_job(job, main.JobRequest(kind="screen", patient_id="synthetic", trial_ids=["BAD", "T-1"]))
+    )
+    assert job["state"] == "done" and job["done"] == 2 and len(job["errors"]) == 2
 
 
 def test_local_api_does_not_expose_secret():
     from fastapi.testclient import TestClient
 
-    from main import app
-    from repository import patients
-
-    client = TestClient(app)
+    client = TestClient(main.app)
     response = client.get("/api/bootstrap")
     assert response.status_code == 200
-    assert len(response.json()["patients"]) == len(patients())
     assert "API_KEY" not in response.text
     assert client.get("/.env").status_code == 404
-    assert (
-        client.post(
-            "/api/jobs", json={"kind": "screen"}, headers={"origin": "https://external.example"}
-        ).status_code
-        == 403
+    cross_origin = client.post(
+        "/api/jobs", json={"kind": "screen"}, headers={"origin": "https://external.example"}
     )
+    assert cross_origin.status_code == 403
+    assert TestClient(main.app, base_url="http://evil.example").get("/api/bootstrap").status_code == 400
+
+
+def test_precompute_dry_run_and_budget(monkeypatch, capsys):
+    monkeypatch.setattr(precompute, "patient_record", lambda identifier: RECORD)
+    monkeypatch.setattr(precompute, "trials_by_id", lambda: {"T-1": TRIAL})
+    storage.put("registry", "T-1", "T-1", REGISTRY)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Dry run must not execute")
+
+    monkeypatch.setattr(precompute, "execute_plan", forbidden)
+    assert precompute.main(["--patient", "synthetic", "--trial", "T-1", "--compare", "--max-new", "3"]) == 0
+    assert '"new_calls": 3' in capsys.readouterr().out
+    with pytest.raises(ValueError, match="max-new"):
+        precompute.build_plan(["synthetic"], ["T-1"], pairs=True, max_new=2)
+    with pytest.raises(ValueError, match="explicit"):
+        precompute.build_plan([], [], pairs=False, max_new=2)
+    storage.put("registry", "T-1", "T-1", {"state": "unresolved"})
+    with pytest.raises(ValueError, match="not linked"):
+        precompute.build_plan([], ["T-1"], pairs=False, max_new=2)
+
+
+def test_demo_is_self_consistent():
+    from demo import demo_data
+
+    data = demo_data()
+    assert [result["summary"]["badge"] for result in data["patient"]["results"]] == [True, False, False]
+    for result in data["patient"]["results"]:
+        for decision in result["decisions"]:
+            assert all(evidence["start"] >= 0 for evidence in decision["evidence"])
+
+
+def test_real_import_preserves_identifiers_and_sources():
+    from repository import DATASET, ROOT, patient_record, patients, trials
+
+    if DATASET is None or not any(ROOT.glob("*.xlsx")):
+        pytest.skip("Local private dataset and study workbook required")
+    cohort = patients()
+    assert len(cohort) == 1830
+    assert len(trials()) == 79
+    assert len({trial["id"] for trial in trials()}) == 79
+    patient = next(item for item in cohort if "C61" in item["diagnoses"] and not item["deceased"])
+    record = patient_record(patient["id"])
+    assert record["sources"]["cohort"]["text"].startswith("pseudonym:")
+    assert select_sources(record)[0]
+    for vital in record["vitals"].values():
+        assert record["sources"][vital["source_id"]]["text"][vital["start"] : vital["end"]] == vital["quote"]

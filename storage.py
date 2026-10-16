@@ -1,74 +1,79 @@
+"""One local SQLite file. Every table is key -> JSON payload, with an indexed owner (patient or trial ID)."""
+
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
-DATABASES = {"facts": "patients.sqlite3", "criteria": "studies.sqlite3", "matches": "matches.sqlite3"}
+PATH = Path(__file__).parent / ".cache" / "trialscreen.sqlite3"
+TABLES = ("registry", "facts", "criteria", "matches")
+SCHEMA = "".join(
+    f"CREATE TABLE IF NOT EXISTS {table} (key TEXT PRIMARY KEY, owner TEXT NOT NULL, "
+    "payload TEXT NOT NULL CHECK(json_valid(payload)), saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
+    f"CREATE INDEX IF NOT EXISTS {table}_owner ON {table}(owner);"
+    for table in TABLES
+) + (
+    "CREATE VIEW IF NOT EXISTS patient_facts AS SELECT facts.owner AS patient_id, "
+    "json_extract(facts.payload, '$.model') AS model, json_extract(fact.value, '$.id') AS fact_id, "
+    "json_extract(fact.value, '$.name') AS name, json_extract(fact.value, '$.value') AS value, "
+    "json_extract(fact.value, '$.date') AS observed_at, "
+    "json_extract(fact.value, '$.evidence.source_id') AS source_id, "
+    "json_extract(fact.value, '$.evidence.quote') AS quote "
+    "FROM facts, json_each(facts.payload, '$.facts') AS fact;"
+    "CREATE VIEW IF NOT EXISTS study_criteria AS SELECT criteria.owner AS trial_id, "
+    "json_extract(criteria.payload, '$.nct_id') AS nct_id, json_extract(criteria.payload, '$.model') AS model, "
+    "json_extract(criterion.value, '$.id') AS criterion_id, json_extract(criterion.value, '$.role') AS role, "
+    "json_extract(criterion.value, '$.requirement') AS requirement, "
+    "json_extract(criterion.value, '$.source.quote') AS quote "
+    "FROM criteria, json_each(criteria.payload, '$.criteria') AS criterion;"
+    "CREATE VIEW IF NOT EXISTS pair_results AS SELECT owner AS patient_id, "
+    "json_extract(payload, '$.trial_id') AS trial_id, json_extract(payload, '$.model') AS model, "
+    "json_extract(payload, '$.summary.status') AS status, "
+    "json_extract(payload, '$.summary.match_percent') AS match_percent FROM matches;"
+)
+_ready: set[Path] = set()
 
 
-def connect(folder: Path, namespace: str) -> sqlite3.Connection:
-    folder.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(folder / DATABASES[namespace], timeout=30)
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute(
-        "CREATE TABLE IF NOT EXISTS outputs ("
-        "cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL CHECK(json_valid(payload)), "
-        "saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
-    )
-    if namespace == "facts":
+def connect() -> sqlite3.Connection:
+    path = PATH
+    if path not in _ready:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.executescript(SCHEMA)
+        _ready.add(path)
+    return sqlite3.connect(path, timeout=30)
+
+
+def _table(name: str) -> str:
+    if name not in TABLES:
+        raise ValueError(f"Unknown table {name}")
+    return name
+
+
+def get(table: str, key: str):
+    with closing(connect()) as connection:
+        row = connection.execute(f"SELECT payload FROM {_table(table)} WHERE key = ?", (key,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def by_owner(table: str, owner: str) -> list:
+    with closing(connect()) as connection:
+        rows = connection.execute(f"SELECT payload FROM {_table(table)} WHERE owner = ?", (owner,)).fetchall()
+    return [json.loads(row[0]) for row in rows]
+
+
+def rows(table: str) -> dict[str, object]:
+    with closing(connect()) as connection:
+        result = connection.execute(f"SELECT key, payload FROM {_table(table)}").fetchall()
+    return {key: json.loads(payload) for key, payload in result}
+
+
+def put(table: str, key: str, owner: str, value: object) -> None:
+    with closing(connect()) as connection, connection:
         connection.execute(
-            "CREATE VIEW IF NOT EXISTS patient_facts AS "
-            "SELECT outputs.cache_key, json_extract(outputs.payload, '$.patient_id') AS patient_id, "
-            "json_extract(outputs.payload, '$.model') AS model, "
-            "json_extract(fact.value, '$.name') AS name, "
-            "json_extract(fact.value, '$.value') AS value, "
-            "json_extract(fact.value, '$.date') AS observed_at, "
-            "json_extract(fact.value, '$.evidence.source_id') AS source_id, "
-            "json_extract(fact.value, '$.evidence.quote') AS quote "
-            "FROM outputs, json_each(outputs.payload, '$.facts') AS fact"
+            f"INSERT INTO {_table(table)}(key, owner, payload) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET owner=excluded.owner, payload=excluded.payload, "
+            "saved_at=CURRENT_TIMESTAMP",
+            (key, owner, json.dumps(value, ensure_ascii=False)),
         )
-    elif namespace == "criteria":
-        connection.execute(
-            "CREATE VIEW IF NOT EXISTS study_criteria AS "
-            "SELECT outputs.cache_key, json_extract(outputs.payload, '$.nct_id') AS nct_id, "
-            "json_extract(outputs.payload, '$.model') AS model, "
-            "json_extract(criterion.value, '$.id') AS criterion_id, "
-            "json_extract(criterion.value, '$.requirement') AS requirement, "
-            "json_extract(criterion.value, '$.role') AS role, "
-            "json_extract(criterion.value, '$.source.quote') AS quote "
-            "FROM outputs, json_each(outputs.payload, '$.criteria') AS criterion"
-        )
-    else:
-        connection.execute(
-            "CREATE VIEW IF NOT EXISTS pair_results AS "
-            "SELECT cache_key, json_extract(payload, '$.patient_id') AS patient_id, "
-            "json_extract(payload, '$.trial_id') AS trial_id, "
-            "json_extract(payload, '$.model') AS model, "
-            "json_extract(payload, '$.summary.status') AS status, "
-            "json_extract(payload, '$.summary.match_percent') AS match_percent "
-            "FROM outputs"
-        )
-    return connection
-
-
-def read_output(folder: Path, namespace: str, key: str):
-    if not (folder / DATABASES[namespace]).exists():
-        return None
-    connection = connect(folder, namespace)
-    try:
-        row = connection.execute("SELECT payload FROM outputs WHERE cache_key = ?", (key,)).fetchone()
-        return json.loads(row[0]) if row else None
-    finally:
-        connection.close()
-
-
-def write_output(folder: Path, namespace: str, key: str, value: object) -> None:
-    connection = connect(folder, namespace)
-    try:
-        with connection:
-            connection.execute(
-                "INSERT INTO outputs(cache_key, payload) VALUES (?, ?) "
-                "ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload, saved_at=CURRENT_TIMESTAMP",
-                (key, json.dumps(value, ensure_ascii=False)),
-            )
-    finally:
-        connection.close()

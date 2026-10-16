@@ -1,143 +1,117 @@
+"""Precompute patient facts, study criteria and optionally their comparisons. Dry run unless --execute.
+
+Every stage is cached by its input, so reruns only do new work. --max-new caps the number of
+uncached model calls (the SDK and schema repair can each add one retry per call).
+"""
+
 import argparse
 import asyncio
 import json
-from datetime import UTC, datetime
 from time import perf_counter
 
-from openai import APIError
-
-from pipeline import PATIENT_MODEL, TRIAL_MODEL, VERSION, extract_patient, extract_trial
-from repository import (
-    load_cache,
-    patient_record,
-    patient_version,
-    patients,
-    save_cache,
-    select_sources,
-    trials,
+import storage
+from pipeline import (
+    compare,
+    extract_patient,
+    extract_trial,
+    match_is_current,
+    patient_input,
+    trial_input,
 )
+from repository import patient_record, trials_by_id
 
 
-def build_plan(patient_ids: list[str], trial_ids: list[str], max_new: int = 2) -> list[dict]:
+def build_plan(patient_ids: list[str], trial_ids: list[str], pairs: bool, max_new: int) -> list[dict]:
     patient_ids = list(dict.fromkeys(patient_ids))
     trial_ids = list(dict.fromkeys(trial_ids))
-    if not 0 <= max_new <= 10 or len(patient_ids) > 5 or len(trial_ids) > 5:
-        raise ValueError("Pilot limit: five patients, five studies and at most ten new extractions")
     if not patient_ids and not trial_ids:
-        raise ValueError("Select explicit --patient or --trial IDs; there is no whole-cohort mode")
-    cohort = {patient["id"]: patient for patient in patients()} if patient_ids else {}
-    trial_map = {trial["id"]: trial for trial in trials()} if trial_ids else {}
+        raise ValueError("Select explicit --patient or --trial IDs")
+    facts_keys = {}
+    criteria_keys = {}
     plan = []
     for identifier in patient_ids:
-        if identifier not in cohort:
-            raise ValueError("Unknown patient ID")
-        version = patient_version(cohort[identifier])
-        key = f"{PATIENT_MODEL}:{VERSION}:{identifier}:{version}"
-        plan.append(
-            {
-                "kind": "patient",
-                "id": identifier,
-                "model": PATIENT_MODEL,
-                "version": version,
-                "cache_hit": load_cache("facts", key) is not None,
-            }
-        )
+        facts_keys[identifier] = patient_input(patient_record(identifier))["key"]
+        cached = storage.get("facts", facts_keys[identifier]) is not None
+        plan.append({"kind": "patient", "patient_id": identifier, "cached": cached})
     for identifier in trial_ids:
-        if identifier not in trial_map:
-            raise ValueError("Unknown study ID")
-        registry = load_cache("registry", identifier)
-        if not registry or not registry.get("clinical_eu_verified") or not registry.get("version"):
-            raise ValueError("Selected study needs a cached, identifier-verified public registry source")
-        key = f"{TRIAL_MODEL}:{VERSION}:{registry['version']}"
-        plan.append(
-            {
-                "kind": "trial",
-                "id": identifier,
-                "model": TRIAL_MODEL,
-                "version": registry["version"],
-                "cache_hit": load_cache("criteria", key) is not None,
-            }
-        )
-    if sum(not item["cache_hit"] for item in plan) > max_new:
-        raise ValueError("Plan exceeds --max-new; reduce the selection or explicitly raise the pilot limit")
+        if identifier not in trials_by_id():
+            raise ValueError(f"Unknown study ID {identifier}")
+        registry = storage.get("registry", identifier)
+        if not registry or registry["state"] != "resolved":
+            raise ValueError(
+                f"Study {identifier} is not linked to the registry; sync registries in the UI first"
+            )
+        criteria_keys[identifier] = trial_input(registry)["key"]
+        cached = storage.get("criteria", criteria_keys[identifier]) is not None
+        plan.append({"kind": "trial", "trial_id": identifier, "cached": cached})
+    if pairs:
+        for patient_id in patient_ids:
+            for trial_id in trial_ids:
+                match = storage.get("matches", f"{patient_id}:{trial_id}")
+                cached = match_is_current(match, facts_keys[patient_id], criteria_keys[trial_id])
+                plan.append(
+                    {"kind": "pair", "patient_id": patient_id, "trial_id": trial_id, "cached": cached}
+                )
+    new = sum(not item["cached"] for item in plan)
+    if new > max_new:
+        raise ValueError(f"Plan needs {new} new model calls, more than --max-new {max_new}")
     return plan
 
 
-async def execute_plan(plan: list[dict]) -> dict:
-    report: dict = {
-        "started_at": datetime.now(UTC).isoformat(),
-        "pipeline_version": VERSION,
-        "comparisons": 0,
-        "items": [],
-    }
+async def execute_plan(plan: list[dict]) -> bool:
+    """Run items in order (patients, trials, pairs). Stops at the first failure; returns success."""
+    facts: dict[str, dict] = {}
+    criteria: dict[str, dict] = {}
     for item in plan:
         started = perf_counter()
-        result = dict(item)
+        report = dict(item)
         try:
             if item["kind"] == "patient":
-                record = patient_record(item["id"])
-                if record["version"] != item["version"]:
-                    raise ValueError("Patient changed after planning")
-                sources, complete = select_sources(record)
-                result.update(
-                    selected_characters=sum(len(source["text"]) for source in sources),
-                    source_selection_complete=complete,
-                )
-                facts = await extract_patient(record)
-                result.update(
-                    fact_count=len(facts["facts"]),
-                    dropped_citations=facts["dropped_citations"],
-                )
+                result = await extract_patient(patient_record(item["patient_id"]))
+                facts[item["patient_id"]] = result
+                report.update(facts=len(result["facts"]), dropped_citations=result["dropped_citations"])
+            elif item["kind"] == "trial":
+                trial = trials_by_id()[item["trial_id"]]
+                result = await extract_trial(trial, storage.get("registry", trial["id"]))
+                criteria[trial["id"]] = result
+                report.update(criteria=len(result["criteria"]), complete=result["complete"])
             else:
-                registry = load_cache("registry", item["id"])
-                if not registry or registry.get("version") != item["version"]:
-                    raise ValueError("Registry changed after planning")
-                criteria = await extract_trial(registry)
-                result.update(criterion_count=len(criteria.criteria), criteria_complete=criteria.complete)
-            result["state"] = "done"
-        except (APIError, ValueError, OSError, LookupError) as error:
-            result.update(state="error", error_type=type(error).__name__)
-        result["seconds"] = round(perf_counter() - started, 3)
-        report["items"].append(result)
-        save_cache("precompute", report["started_at"], report)
-        print(json.dumps(result), flush=True)
-        if result["state"] == "error":
-            break
-    return report
+                trial = trials_by_id()[item["trial_id"]]
+                result = await compare(trial, facts[item["patient_id"]], criteria[item["trial_id"]])
+                report.update(status=result["summary"]["status"])
+            report["state"] = "done"
+        except Exception as error:  # noqa: BLE001 - job boundary; record and continue
+            # Only the type: messages can echo model output or clinical text.
+            report.update(state="error", error_type=type(error).__name__)
+        report["seconds"] = round(perf_counter() - started, 3)
+        print(json.dumps(report), flush=True)
+        if report["state"] == "error":
+            return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Bounded extraction-only pilot; dry run unless --execute")
-    parser.add_argument("--patient", action="append", default=[], help="Patient ID; repeat up to five times")
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--patient", action="append", default=[], help="Patient ID (repeatable)")
+    parser.add_argument("--trial", action="append", default=[], help="Registry-linked study ID (repeatable)")
+    parser.add_argument("--compare", action="store_true", help="Also compare every selected patient x study")
+    parser.add_argument("--max-new", type=int, default=2, help="Maximum uncached model calls (default 2)")
     parser.add_argument(
-        "--trial", action="append", default=[], help="Verified study ID; repeat up to five times"
-    )
-    parser.add_argument(
-        "--max-new", type=int, default=2, help="Maximum new extractions, default 2, hard limit 10"
-    )
-    parser.add_argument(
-        "--execute", action="store_true", help="Send uncached selected records to the organizer API"
+        "--execute", action="store_true", help="Send uncached inputs to the configured model API"
     )
     args = parser.parse_args(argv)
     try:
-        plan = build_plan(args.patient, args.trial, args.max_new)
-    except (ValueError, OSError, LookupError) as error:
+        plan = build_plan(args.patient, args.trial, args.compare, args.max_new)
+    except (ValueError, LookupError, OSError) as error:
         parser.error(str(error))
+    new = sum(not item["cached"] for item in plan)
     print(
-        json.dumps(
-            {
-                "mode": "execute" if args.execute else "dry_run",
-                "items": plan,
-                "new_extractions": sum(not item["cache_hit"] for item in plan),
-                "comparisons": 0,
-            }
-        ),
+        json.dumps({"mode": "execute" if args.execute else "dry_run", "new_calls": new, "items": plan}),
         flush=True,
     )
     if not args.execute:
         return 0
-    report = asyncio.run(execute_plan(plan))
-    return int(any(item["state"] == "error" for item in report["items"]))
+    return 0 if asyncio.run(execute_plan(plan)) else 1
 
 
 if __name__ == "__main__":

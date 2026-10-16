@@ -1,3 +1,5 @@
+"""Read the local dataset: cohort CSV, per-patient FHIR bundles and the study workbook."""
+
 import base64
 import csv
 import hashlib
@@ -8,41 +10,20 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from storage import DATABASES, read_output, write_output
-
 ROOT = Path(__file__).parent
-CACHE = ROOT / ".cache"
 DATASET = next(ROOT.glob("rakathon-dataset-*/"), None)
+SOURCE_BUDGET = 90_000
+NOTE_KINDS = ("DocumentReference", "DiagnosticReport")
+MEDICATION_KINDS = ("MedicationRequest", "MedicationAdministration")
+VITAL_PATTERNS = {
+    "height": r"\bv[ýy]ška\s*:?\s*(\d{2,3}(?:[.,]\d+)?)\s*cm\b",
+    "weight": r"\b(?:v[áa]ha|hmotnost)\s*:?\s*(\d{2,3}(?:[.,]\d+)?)\s*kg\b",
+    "ecog": r"\b(?:ECOG(?:\s*PS)?|WHO\s*PS|PS)\s*:?\s*([0-4])\b",
+}
 
 
 def fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
-
-
-def load_cache(namespace: str, key: str):
-    if namespace in DATABASES:
-        output = read_output(CACHE, namespace, fingerprint(key))
-        if output is not None:
-            return output
-    path = CACHE / namespace / f"{fingerprint(key)}.json"
-    if path.exists():
-        output = json.loads(path.read_text(encoding="utf-8"))
-        if namespace in DATABASES:
-            write_output(CACHE, namespace, fingerprint(key), output)
-        return output
-    return None
-
-
-def save_cache(namespace: str, key: str, value: object) -> None:
-    if namespace in DATABASES:
-        write_output(CACHE, namespace, fingerprint(key), value)
-        return
-    folder = CACHE / namespace
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{fingerprint(key)}.json"
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
 
 
 @lru_cache(maxsize=1)
@@ -70,50 +51,47 @@ def patients() -> list[dict]:
 
 
 @lru_cache(maxsize=1)
+def patients_by_id() -> dict[str, dict]:
+    return {patient["id"]: patient for patient in patients()}
+
+
+def trial_slug(protocol: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", protocol).strip("-").upper() or "TRIAL"
+
+
+@lru_cache(maxsize=1)
 def trials() -> list[dict]:
     path = next(ROOT.glob("*.xlsx"), None)
     if not path:
         return []
     workbook = load_workbook(path, read_only=True, data_only=True)
     result = []
+    seen: dict[str, int] = {}
     for row_number, row in enumerate(workbook.active.values, 1):
         if row_number <= 2 or len(row) < 8 or not row[2] or not row[4]:
             continue
         protocol = str(row[2]).strip()
-        source = "\n".join(
-            f"{label}: {row[index] or ''}"
-            for index, label in [
-                (0, "Hospital ID"),
-                (2, "Protocol"),
-                (3, "Sponsor"),
-                (4, "Title"),
-                (7, "Diagnosis"),
-            ]
-        )
+        # IDs derive from the protocol, not the row, so cached registry/criteria survive workbook edits.
+        slug = trial_slug(protocol)
+        seen[slug] = seen.get(slug, 0) + 1
         result.append(
             {
-                "id": f"T{row_number:03d}",
+                "id": slug if seen[slug] == 1 else f"{slug}-{seen[slug]}",
                 "hospital_id": str(row[0] or ""),
                 "protocol": protocol,
                 "title": str(row[4]).strip(),
                 "diagnosis": str(row[7] or ""),
                 "sponsor": str(row[3] or ""),
                 "phase": str(row[6] or ""),
-                "source": {
-                    "id": f"xlsx:{row_number}",
-                    "title": f"{path.name} / Sheet1 / row {row_number}",
-                    "text": source,
-                    "date": None,
-                    "kind": "workbook",
-                },
             }
         )
     workbook.close()
     return result
 
 
-def get_trial(identifier: str) -> dict:
-    return next(item for item in trials() if item["id"] == identifier)
+@lru_cache(maxsize=1)
+def trials_by_id() -> dict[str, dict]:
+    return {trial["id"]: trial for trial in trials()}
 
 
 def code_label(code: dict) -> str:
@@ -124,28 +102,33 @@ def code_label(code: dict) -> str:
     )
 
 
-@lru_cache(maxsize=8)
 def patient_record(identifier: str) -> dict:
-    patient = next(item for item in patients() if item["id"] == identifier)
-    if DATASET is None:
-        raise ValueError("Dataset not found")
+    patient = patients_by_id().get(identifier)
+    if patient is None or DATASET is None:
+        raise LookupError("Patient not found")
     path = DATASET / "fhir" / f"{identifier}.json"
+    return _patient_record(identifier, path, path.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=16)
+def _patient_record(identifier: str, path: Path, mtime: int) -> dict:
+    patient = patients_by_id()[identifier]
     bundle = json.loads(path.read_text(encoding="utf-8"))
-    sources: dict[str, dict] = {}
-    cohort_text = "\n".join(f"{key}: {value}" for key, value in patient["raw"].items())
-    sources["cohort"] = {
-        "id": "cohort",
-        "title": "kohorta.csv / " + identifier,
-        "text": cohort_text,
-        "date": None,
-        "kind": "demographics",
+    sources: dict[str, dict] = {
+        "cohort": {
+            "id": "cohort",
+            "title": "kohorta.csv / " + identifier,
+            "text": "\n".join(f"{key}: {value}" for key, value in patient["raw"].items()),
+            "date": None,
+            "kind": "demographics",
+        }
     }
     labs = []
     treatments = []
-    for entry in bundle.get("entry", []):
+    for index, entry in enumerate(bundle.get("entry", [])):
         resource = entry["resource"]
         kind = resource["resourceType"]
-        source_id = resource.get("id", "")
+        source_id = resource.get("id") or f"{kind}-{index}"
         date = resource.get("effectiveDateTime") or resource.get("date")
         title = code_label(resource.get("code", resource.get("type", {}))) or kind
         text = ""
@@ -161,33 +144,27 @@ def patient_record(identifier: str) -> dict:
             quantity = resource.get("valueQuantity", {})
             value = quantity.get("value", resource.get("valueString", ""))
             unit = quantity.get("unit", "")
-            text = f"{title}: {value} {unit}\nDate: {date}\nReference: {json.dumps(resource.get('referenceRange', []), ensure_ascii=False)}"
+            reference = json.dumps(resource.get("referenceRange", []), ensure_ascii=False)
+            text = f"{title}: {value} {unit}\nDate: {date}\nReference: {reference}"
             labs.append({"name": title, "value": value, "unit": unit, "date": date, "source_id": source_id})
-        elif kind in ("MedicationRequest", "MedicationAdministration"):
+        elif kind in MEDICATION_KINDS:
             medication = code_label(resource.get("medicationCodeableConcept", {}))
             date = date or resource.get("authoredOn") or resource.get("effectivePeriod", {}).get("start")
-            text = f"{medication}\nDate: {date}\n{json.dumps(resource.get('dosageInstruction', resource.get('dosage', {})), ensure_ascii=False)}"
+            dosage = json.dumps(
+                resource.get("dosageInstruction", resource.get("dosage", {})), ensure_ascii=False
+            )
+            text = f"{medication}\nDate: {date}\n{dosage}"
             treatments.append({"name": medication, "date": date, "source_id": source_id})
         if text:
             sources[source_id] = {"id": source_id, "title": title, "date": date, "text": text, "kind": kind}
     notes = sorted(
-        (
-            source
-            for source in sources.values()
-            if source["kind"] in ("DocumentReference", "DiagnosticReport")
-        ),
+        (source for source in sources.values() if source["kind"] in NOTE_KINDS),
         key=lambda source: source["date"] or "",
         reverse=True,
     )
     dated = [source["date"] for source in sources.values() if source["date"]]
-    snapshot_at = max(dated)[:10] if dated else None
     vitals = {}
-    patterns = {
-        "height": r"(?:v[ýy]ška)\s*:?\s*(\d{2,3}(?:[.,]\d+)?)\s*cm",
-        "weight": r"(?:v[áa]ha|hmotnost)\s*:?\s*(\d{2,3}(?:[.,]\d+)?)\s*kg",
-        "ecog": r"(?:ECOG|WHO|PS)\s*:?\s*([0-4])\b",
-    }
-    for name, pattern in patterns.items():
+    for name, pattern in VITAL_PATTERNS.items():
         for source in notes:
             match = re.search(pattern, source["text"], re.IGNORECASE)
             if match:
@@ -207,41 +184,38 @@ def patient_record(identifier: str) -> dict:
         **patient,
         "sources": sources,
         "vitals": vitals,
-        "snapshot_at": snapshot_at,
-        "version": patient_version(patient),
+        "snapshot_at": max(dated)[:10] if dated else None,
         "recent_notes": [{key: value for key, value in note.items() if key != "text"} for note in notes[:12]],
         "latest_labs": list(latest_labs.values()),
         "treatments": treatments,
     }
 
 
-def patient_version(patient: dict) -> str:
-    if DATASET is None:
-        raise ValueError("Dataset not found")
-    path = DATASET / "fhir" / f"{patient['id']}.json"
-    return fingerprint({"mtime": path.stat().st_mtime_ns, "cohort": patient["raw"]})
+def select_sources(record: dict, budget: int = SOURCE_BUDGET) -> tuple[list[dict], bool]:
+    """Demographics, latest value per lab, medications, then newest notes, within a character budget.
 
-
-def select_sources(record: dict, character_budget: int = 90000) -> tuple[list[dict], bool]:
+    Older values of a lab are superseded on purpose and do not make the selection incomplete;
+    only candidates dropped for budget do.
+    """
     sources = list(record["sources"].values())
+    latest_ids = {lab["source_id"] for lab in record["latest_labs"]}
+    structured = [
+        source
+        for source in sources
+        if source["kind"] == "demographics"
+        or source["id"] in latest_ids
+        or source["kind"] in MEDICATION_KINDS
+    ]
     notes = sorted(
-        (item for item in sources if item["kind"] in ("DocumentReference", "DiagnosticReport")),
-        key=lambda item: item["date"] or "",
+        (source for source in sources if source["kind"] in NOTE_KINDS),
+        key=lambda source: source["date"] or "",
         reverse=True,
     )
-    latest_ids = {item["source_id"] for item in record["latest_labs"]}
-    structured = [
-        item
-        for item in sources
-        if item["kind"] == "demographics"
-        or item["id"] in latest_ids
-        or item["kind"] in ("MedicationRequest", "MedicationAdministration")
-    ]
+    candidates = structured + notes
     selected = []
     total = 0
-    for source in structured + notes:
-        if total + len(source["text"]) <= character_budget:
+    for source in candidates:
+        if total + len(source["text"]) <= budget:
             selected.append(source)
             total += len(source["text"])
-    complete = len(selected) == len(sources)
-    return selected, complete
+    return selected, len(selected) == len(candidates)

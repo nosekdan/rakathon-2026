@@ -1,4 +1,4 @@
-from screening import Criterion, Evidence, Logic, TrialExtraction, locate_evidence, summarize
+from screening import Criterion, Evidence, Logic, TrialExtraction, badge, locate_evidence, summarize
 
 
 def demo_data():
@@ -136,14 +136,16 @@ def demo_data():
             logic=Logic(op="all", children=[Logic(op="ref", criterion_id=item.id) for item in criteria]),
             complete=True,
         )
-        registry = {
-            "status": "RECRUITING",
-            "site_recruiting": True,
-            "state": "synthetic",
-            "clinical_eu_verified": False,
-            "clinical_eu_url": None,
-            "url": None,
-        }
+        registry = {"status": "RECRUITING", "site_recruiting": True, "state": "synthetic", "url": None}
+        summary = summarize(extraction, decisions)
+        summary["badge"] = badge(
+            summary["status"],
+            criteria_complete=True,
+            facts_complete=True,
+            recruiting=True,
+            site_recruiting=True,
+            deceased=False,
+        )
         studies.append(
             {
                 "id": trial_id,
@@ -159,7 +161,7 @@ def demo_data():
             {
                 "patient_id": patient["id"],
                 "trial_id": trial_id,
-                "summary": summarize(extraction, decisions, "RECRUITING"),
+                "summary": summary,
                 "criteria": extraction.model_dump(),
                 "decisions": decisions,
                 "registry": registry,
