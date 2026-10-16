@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trial Matching</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    .ok { color: #1a7f37; } .err { color: #cf222e; }
+    pre { background: #f6f8fa; padding: 1rem; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>AI Trial Matching</h1>
+  <p>Stav backendu a databáze: <strong id="status">načítám…</strong></p>
+  <pre id="details"></pre>
+  <script>
+    fetch("/api/health")
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        document.getElementById("status").textContent = "OK";
+        document.getElementById("status").className = "ok";
+        document.getElementById("details").textContent = JSON.stringify(data, null, 2);
+      })
+      .catch(err => {
+        document.getElementById("status").textContent = "chyba: " + err;
+        document.getElementById("status").className = "err";
+      });
+  </script>
+</body>
+</html>

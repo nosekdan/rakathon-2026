@@ -1,0 +1,11 @@
+# secrets
+.env
+# patient data must never be committed
+data/
+*.csv
+*.zip
+*.ndjson
+# python
+__pycache__/
+*.pyc
+.venv/
