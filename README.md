@@ -88,7 +88,7 @@ Cases are skipped when the study is named in the patient's earliest record, when
 
 ```sh
 uv run python benchmark.py            # dry run: leak check, cache status
-uv run python benchmark.py --execute --patient PAC-XXXXXXXXXX  # run one case
+uv run python benchmark.py --execute --patient PAC-XXXXXXXXXX  # run one case (add --json for raw output)
 ```
 
 Verdicts for enrolled/offered patients: `HIT` (met), `OPEN` (not excluded, open criteria to review),
