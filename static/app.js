@@ -1,4 +1,4 @@
-const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', history:[], dxEditing:false, dxDraft:'', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
+const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', history:[], dxEditing:null, dxDraft:'', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
 const labels = {met:'Splněno', not_met:'Nesplněno', unknown:'Lidská kontrola', missing:'Chybí údaje'};
 const statusIcons = {met:'circle-check', not_met:'circle-x', unknown:'circle-help', missing:'file-question'};
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
@@ -85,16 +85,19 @@ async function goBack() {
 // Studies with no contradicted criterion. Unclear or missing data never hides a study:
 // the doctor decides, the model never excludes.
 const closedStatuses = ['COMPLETED', 'TERMINATED', 'WITHDRAWN', 'SUSPENDED', 'ACTIVE_NOT_RECRUITING'];
-const reviewable = () => currentResults().filter(result => result.summary.status !== 'not_met' && !closedStatuses.includes(result.registry?.status));
+const reviewable = (results = currentResults()) => results.filter(result => result.summary.status !== 'not_met' && !closedStatuses.includes(result.registry?.status));
 
-function trialWidget() {
-  const studies = reviewable();
+// In the database overview (already inside TrialScreen) the widget opens that patient's matches in place.
+function trialWidget(patient = state.patient, inOverview = false) {
+  const studies = reviewable(patient.results || []);
   if (!studies.length) return '';
   const complete = studies.filter(result => result.summary.badge).length;
   const best = [...studies].sort(byFit)[0];
   const bestLine = `Nejlepší shoda: ${escapeHtml(trialById(best.trial_id)?.protocol || best.trial_id)} · ${best.summary.match_percent} %`;
   const detail = complete ? `${complete} ${plural(complete, 'splňuje', 'splňují', 'splňuje')} všechna kritéria · ostatní k ověření` : 'Žádné kritérium pacienta nevylučuje · ověřit s týmem studie';
-  return `<button class="trial-widget" data-action="open-matches"><span class="widget-icon">${icon('lightbulb')}</span><span class="widget-copy"><span class="widget-eyebrow">TRIALSCREEN · KLINICKÉ STUDIE</span><strong>${studies.length} ${plural(studies.length, 'studie', 'studie', 'studií')} k posouzení</strong><small>${bestLine}</small><small>${detail}</small></span>${icon('arrow-up-right')}</button>`;
+  const first = studies.find(result => result.summary.badge) || best;
+  const target = inOverview ? `data-open-patient="${escapeHtml(patient.id)}" data-open-trial="${escapeHtml(first.trial_id)}"` : 'data-action="open-matches"';
+  return `<button class="trial-widget" ${target}><span class="widget-icon">${icon('lightbulb')}</span><span class="widget-copy"><span class="widget-eyebrow">TRIALSCREEN · KLINICKÉ STUDIE</span><strong>${studies.length} ${plural(studies.length, 'studie', 'studie', 'studií')} k posouzení</strong><small>${bestLine}</small><small>${detail}</small></span>${icon('arrow-up-right')}</button>`;
 }
 
 function openMatchesWindow() {
@@ -107,8 +110,7 @@ function openMatchesWindow() {
 }
 
 // The patient card: the always-visible sheet (identity and key metrics) and the record columns below it.
-function patientSheet() {
-  const patient = state.patient;
+function patientSheet(patient = state.patient) {
   const labPriority = lab => /hemoglobin|kreatinin|neutrofil|trombocyt|bilirubin|albumin|^PSA$/i.test(lab.name) ? 0 : typeof lab.value === 'number' ? 1 : 2;
   const displayedLabs = [...patient.latest_labs].sort((first,second)=>labPriority(first)-labPriority(second)).slice(0,7);
   const demographicsSource = patient.synthetic ? 'demo-note' : 'cohort';
@@ -139,24 +141,30 @@ function diagnosisSection(patient) {
     const status = review.verified
       ? `<span class="status-pill status-met">${icon('shield-check')}Potvrzeno lékařem ${date(review.verified_at)}</span><small>Zobrazeny jen studie pro tyto diagnózy (a studie s nejistou diagnózou).</small>`
       : `<span class="status-pill status-unknown">${icon('shield-alert')}Nepotvrzeno</span><small>Zobrazeny všechny studie bez ohledu na diagnózu.</small>`;
-    const buttons = state.dxEditing
-      ? `<input id="dx-codes" value="${escapeHtml(state.dxDraft)}" placeholder="Kódy MKN-10, např. C61, C64" aria-label="Kódy MKN-10"><button class="primary-button" data-dx="save">${icon('check')}Uložit a potvrdit</button><button class="secondary-button" data-dx="cancel">Zrušit</button>`
-      : `${review.verified ? '' : `<button class="primary-button" data-dx="confirm">${icon('shield-check')}Potvrdit diagnózy</button>`}<button class="secondary-button" data-dx="edit">${icon('pencil')}Upravit</button>${review.verified ? `<button class="secondary-button" data-dx="unconfirm">Zrušit potvrzení</button>` : ''}`;
+    const id = escapeHtml(patient.id);
+    const buttons = state.dxEditing === patient.id
+      ? `<input id="dx-codes" value="${escapeHtml(state.dxDraft)}" placeholder="Kódy MKN-10, např. C61, C64" aria-label="Kódy MKN-10"><button class="primary-button" data-dx="save" data-dx-patient="${id}">${icon('check')}Uložit a potvrdit</button><button class="secondary-button" data-dx="cancel" data-dx-patient="${id}">Zrušit</button>`
+      : `${review.verified ? '' : `<button class="primary-button" data-dx="confirm" data-dx-patient="${id}">${icon('shield-check')}Potvrdit diagnózy</button>`}<button class="secondary-button" data-dx="edit" data-dx-patient="${id}">${icon('pencil')}Upravit</button>${review.verified ? `<button class="secondary-button" data-dx="unconfirm" data-dx-patient="${id}">Zrušit potvrzení</button>` : ''}`;
     control = `<div class="dx-review"><div class="dx-status">${status}${review.edited ? `<small>Upraveno lékařem; v kohortě: ${escapeHtml(review.cohort.join(', ') || '—')}</small>` : ''}</div><div class="dx-actions">${buttons}</div></div>`;
   }
   return `<div class="dx-block"><div class="section-heading">${icon('clipboard-plus')}<h3>Diagnózy</h3>${source}</div><table class="mini-table dx-table"><thead><tr><th>MKN-10</th><th>Název</th></tr></thead><tbody>${rows}</tbody></table>${control}</div>`;
 }
 
-async function reviewDiagnoses(action) {
-  const patientId = encodeURIComponent(state.patient.id);
-  if (action === 'edit') {state.dxEditing = true; state.dxDraft = state.patient.diagnosis_review.codes.join(', '); render(); document.querySelector('#dx-codes')?.focus(); return;}
-  if (action === 'cancel') {state.dxEditing = false; render(); return;}
+async function reviewDiagnoses(action, patientId) {
+  const patient = patientId === state.patient.id ? state.patient : state.details[detailKey('patient', patientId)];
+  const review = patient.diagnosis_review;
+  if (action === 'edit') {state.dxEditing = patientId; state.dxDraft = review.codes.join(', '); render(); document.querySelector('#dx-codes')?.focus(); return;}
+  if (action === 'cancel') {state.dxEditing = null; render(); return;}
   const body = action === 'save' ? {codes:state.dxDraft.split(/[,;\s]+/).filter(Boolean), verified:true}
-    : {codes:action === 'confirm' ? state.patient.diagnosis_review.codes : null, verified:action === 'confirm'};
-  if (action === 'unconfirm') body.codes = state.patient.diagnosis_review.edited ? state.patient.diagnosis_review.codes : null;
-  await api(`/api/patients/${patientId}/diagnoses`, {method:'PUT', body:JSON.stringify(body)});
-  state.dxEditing = false;
-  state.patient = await api(`/api/patients/${patientId}`);
+    : {codes:review.edited ? review.codes : null, verified:action === 'confirm'};
+  const path = `/api/patients/${encodeURIComponent(patientId)}`;
+  await api(`${path}/diagnoses`, {method:'PUT', body:JSON.stringify(body)});
+  state.dxEditing = null;
+  // Diagnoses change which studies are paired, so the card, the patient and the overview all reload.
+  const fresh = await api(path);
+  if (patientId === state.patient.id) state.patient = fresh;
+  if (detailKey('patient', patientId) in state.details) state.details[detailKey('patient', patientId)] = fresh;
+  if (state.overview) await loadOverview();
   render();
   toast(action === 'unconfirm' ? 'Potvrzení diagnóz zrušeno – zobrazeny všechny studie.' : 'Diagnózy potvrzeny – studie spárovány podle diagnózy.');
 }
@@ -178,8 +186,8 @@ const icdNames = {C09:'Zhoubný novotvar mandle', C11:'Zhoubný novotvar nosohlt
 const diagnosisName = code => icdNames[code.slice(0, 3)] || 'Diagnóza MKN-10';
 
 // TrialScreen window: the same patient card above the study matches; records, diagnoses and labs fold out on click.
-function patientCard() {
-  const {sheet, records} = patientSheet();
+function patientCard(patient = state.patient) {
+  const {sheet, records} = patientSheet(patient);
   const label = state.stripOpen ? 'Skrýt záznamy a laboratoř' : 'Zobrazit záznamy a laboratoř';
   return `<div class="patient-card">${sheet}<button class="card-toggle" data-action="toggle-strip" aria-expanded="${state.stripOpen}">${icon(state.stripOpen ? 'chevron-up' : 'chevron-down')}${label}</button>${state.stripOpen ? records : ''}</div>`;
 }
@@ -339,6 +347,7 @@ function detail(kind, identifier) {
 }
 
 async function fetchDetail(kind, identifier) {
+  if (kind === 'patient') return state.mode === 'demo' ? patientSummary(identifier) : api(`/api/patients/${encodeURIComponent(identifier)}`);
   if (state.mode === 'demo') {
     if (kind === 'facts') return {model:'Syntetická ukázka', snapshot_at:patientSummary(identifier).snapshot_at, complete:true, limitations:['Syntetický pacient. Úpravy v demu se neukládají.'], facts:patientSummary(identifier).facts};
     const criteria = state.demo.patients.flatMap(patient => patient.results).find(result => result.trial_id === identifier)?.criteria;
@@ -610,7 +619,10 @@ function reviewBanner(facts) {
 
 function renderPatientDetail(summary) {
   const record = detail('facts', summary.id);
-  const head = `<div class="trial-head"><div class="eyebrow">${escapeHtml(summary.id)} · ${summary.synthetic ? 'SYNTETICKÁ UKÁZKA' : 'PSEUDONYMIZOVANÝ ZÁZNAM'}</div><h2>${escapeHtml(summary.name)}</h2><div class="trial-links"><span class="muted">${escapeHtml(summary.age || 'Věk neuveden')} · ${sexName(summary.sex)} · ${escapeHtml(summary.diagnoses || 'Diagnóza neuvedena')}</span>${summary.deceased ? '<span class="status-pill status-not_met">Záznam o úmrtí</span>' : ''}</div></div>`;
+  const full = detail('patient', summary.id);
+  // The same patient card as above the study matches, with the TrialScreen widget for this patient.
+  const card = full && !full.error ? patientCard(full) + (trialWidget(full, true) || `<div class="trial-widget muted-widget"><span class="widget-copy"><span class="widget-eyebrow">TRIALSCREEN · KLINICKÉ STUDIE</span><small>${(full.results || []).length ? 'Žádná nabírající studie bez nesplněného kritéria' : 'Pacient zatím nebyl posouzen'}</small></span></div>`) : '';
+  const head = card || `<div class="trial-head"><div class="eyebrow">${escapeHtml(summary.id)} · ${summary.synthetic ? 'SYNTETICKÁ UKÁZKA' : 'PSEUDONYMIZOVANÝ ZÁZNAM'}</div><h2>${escapeHtml(summary.name)}</h2><div class="trial-links"><span class="muted">${escapeHtml(summary.age || 'Věk neuveden')} · ${sexName(summary.sex)} · ${escapeHtml(summary.diagnoses || 'Diagnóza neuvedena')}</span>${summary.deceased ? '<span class="status-pill status-not_met">Záznam o úmrtí</span>' : ''}</div></div>`;
   if (!record) return `<section class="match-detail">${head}${loadingBlock}</section>`;
   if (record.error) return `<section class="match-detail">${head}<p class="empty-note">${escapeHtml(record.error)}</p></section>`;
   if (!record.facts) return `<section class="match-detail">${head}<div class="empty-state">${icon('database')}<h2>V naší databázi zatím nejsou žádné údaje</h2><p>Dokumentace pacienta ještě nebyla zpracována (precompute.py), nebo se od posledního zpracování změnila.</p></div></section>`;
@@ -623,6 +635,9 @@ function renderPatientDetail(summary) {
   return `<section class="match-detail">${head}${reviewBanner(record.facts)}${summaryLine}${groups}<div class="assessment-foot">${(record.limitations || []).map(limit => `<div>${escapeHtml(limit)}</div>`).join('')}<div>Úpravy lékaře se ukládají vedle původní extrakce, ta se nepřepisuje.</div></div></section>`;
 }
 
+// A patient is confirmed when a clinician confirmed the diagnoses and every extracted fact; otherwise no icon.
+const patientVerified = entry => Boolean(entry?.facts && entry.diagnoses_verified && entry.verified === entry.facts);
+
 function renderOverviewPatients() {
   const entries = Object.fromEntries(state.overview.patients.map(entry => [entry.id, entry]));
   const all = cohort();
@@ -632,7 +647,7 @@ function renderOverviewPatients() {
   if (!listed.length) return `<p class="empty-note">Žádný pacient neodpovídá hledání.</p>`;
   if (!listed.some(patient => patient.id === state.overviewPatient)) state.overviewPatient = listed.find(patient => patient.id === state.patient.id)?.id || listed[0].id;
   const selected = listed.find(patient => patient.id === state.overviewPatient);
-  return `<div class="matches-layout"><aside class="study-list" aria-label="Pacienti">${listed.slice(0, state.overviewLimit).map(patient => {const entry = entries[patient.id];return `<button class="study-choice ${patient.id === state.overviewPatient ? 'active' : ''}" data-overview-patient="${escapeHtml(patient.id)}"><div class="study-protocol id-label">${escapeHtml(patient.id)}</div><div class="study-name">${escapeHtml(patient.name)}</div><div class="study-score"><span>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)} · ${escapeHtml(patient.diagnoses || '—')}<br>${entry?.facts ? `${entry.results.filter(isCandidate).length} kandidátních studií · ${entry.facts} údajů${entry.verified ? ` · ${entry.verified} ověřeno` : ''}` : '<span class="muted">Nezpracováno</span>'}</span>${entry?.facts ? `<strong title="Kandidátní studie">${entry.results.filter(isCandidate).length}</strong>` : ''}</div></button>`;}).join('')}${listPager(listed.length)}</aside>${renderPatientDetail(selected)}</div>`;
+  return `<div class="matches-layout"><aside class="study-list" aria-label="Pacienti">${listed.slice(0, state.overviewLimit).map(patient => {const entry = entries[patient.id];return `<button class="study-choice ${patient.id === state.overviewPatient ? 'active' : ''}" data-overview-patient="${escapeHtml(patient.id)}">${patientVerified(entry) ? `<span class="review-icon verified" title="Lékař potvrdil diagnózy i všechny údaje pacienta" aria-label="Údaje pacienta potvrzeny lékařem">${icon('shield-check')}</span>` : ''}<div class="study-protocol id-label">${escapeHtml(patient.id)}</div><div class="study-name">${escapeHtml(patient.name)}</div><div class="study-score"><span>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)} · ${escapeHtml(patient.diagnoses || '—')}<br>${entry?.facts ? `${entry.results.filter(isCandidate).length} kandidátních studií · ${entry.facts} údajů${entry.verified ? ` · ${entry.verified} ověřeno` : ''}` : '<span class="muted">Nezpracováno</span>'}</span>${entry?.facts ? `<strong title="Kandidátní studie">${entry.results.filter(isCandidate).length}</strong>` : ''}</div></button>`;}).join('')}${listPager(listed.length)}</aside>${renderPatientDetail(selected)}</div>`;
 }
 
 function renderOverview() {
@@ -770,7 +785,7 @@ document.addEventListener('click',async event=>{
     if(button.hasAttribute('data-criteria-add')){const text=state.criteriaDraft.text.trim();if(text.length<2)throw new Error('Zadejte text kritéria.');await changeCriteria(state.overviewTrial,{add:{role:state.criteriaDraft.role,text}});state.criteriaDraft={...state.criteriaDraft,text:''};render();toast('Kritérium přidáno. Vyhodnocuji u pacientů…');}
     if(button.dataset.editCriteria){navigate('overview',{overviewTab:'trials',overviewTrial:button.dataset.editCriteria,overviewFilter:'all',overviewQuery:''});state.criteriaEditing=button.dataset.editCriteria;await loadOverview();render();scrollTo(0,0);}
     if(button.dataset.action==='back')await goBack();
-    if(button.dataset.dx)await reviewDiagnoses(button.dataset.dx);
+    if(button.dataset.dx)await reviewDiagnoses(button.dataset.dx,button.dataset.dxPatient);
     if(button.dataset.mode){if(state.mode==='real')state.realPatientId=state.patient.id;await setMode(button.dataset.mode);}
     if(button.dataset.source)await showSource(button.dataset.source,button.dataset.quote||'',button.dataset.sourcePatient||state.patient.id);
     if(button.hasAttribute('data-close-dialog'))button.closest('dialog').close();
@@ -834,6 +849,7 @@ async function initialize(){
       await selectPatient(params.get('patient')||state.data.patients[0].id);
       // "Upravit kritéria studie" opens the overview on that study in edit mode.
       if(params.get('trial')){state.overviewTrial=params.get('trial');state.criteriaEditing=params.get('trial');}
+      if(params.get('tab')==='patients'){state.overviewTab='patients';state.overviewPatient=params.get('patient');}
       await loadOverview();state.view='overview';render();return;
     }
     if(popup){

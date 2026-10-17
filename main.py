@@ -462,6 +462,7 @@ def build_overview():
                 "facts": len(facts["facts"]) if facts else None,
                 "verified": sum(edit["verified"] for edit in reviewed),
                 "edited": sum(edit["value"] is not None for edit in reviewed),
+                "diagnoses_verified": patient_diagnoses(patient_id)["verified"],
                 "results": [result_summary(result) for result in results],
             }
         )
