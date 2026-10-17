@@ -307,6 +307,16 @@ def compare(trial: dict, facts: dict, criteria: dict, deployment: str, model_ver
     decisions = [_decision(item["id"], r, fact_ids) for item, r in zip(criteria["criteria"], results)]
     extraction = TrialExtraction.model_validate(criteria)
     verified = verify_decisions(extraction.criteria, decisions, {fact["id"]: fact for fact in facts["facts"]})
+    summary = summarize(extraction, verified)
+    # Percent of criteria assessable from documentation: administrative conditions (consent, contraception, ...)
+    # are settled at screening for everyone and leave the denominator; silence is never counted as met.
+    administrative = sum(1 for item in criteria["criteria"] if item["tm"].get("evaluability") == "not_assessable")
+    assessable = summary["total"] - administrative
+    summary.update(
+        match_percent=round(100 * summary["counts"]["met"] / assessable) if assessable else 0,
+        assessable=assessable,
+        administrative=administrative,
+    )
     return {
         "patient_id": facts["patient_id"],
         "trial_id": trial["id"],
@@ -316,7 +326,7 @@ def compare(trial: dict, facts: dict, criteria: dict, deployment: str, model_ver
         "label": "Pravidla trialmatch" + (" + lokální LLM" if deployment.endswith("+llm") else ""),
         "pipeline_version": model_version,
         "assessed_at": datetime.now(UTC).isoformat(),
-        "summary": summarize(extraction, verified),
+        "summary": summary,
         "decisions": verified,
         "future_watch": future_watch(extraction, verified),
     }

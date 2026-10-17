@@ -97,21 +97,37 @@ function resultProgress(result) {
   return `<div class="progress-track" aria-label="Rozložení stavů kritérií">${Object.entries(result.summary.counts).map(([status,count])=>`<span class="bg-${status}" style="width:${100*count/(result.summary.total||1)}%" title="${labels[status]}: ${count}"></span>`).join('')}</div>`;
 }
 
+// Studies: fewest red (not met) criteria first, then highest match %, then highest share of amber (clinician review).
+const share = (result, status) => result.summary.counts[status] / (result.summary.total || 1);
+const byFit = (first, second) => first.summary.counts.not_met - second.summary.counts.not_met
+  || second.summary.match_percent - first.summary.match_percent
+  || share(second, 'unknown') - share(first, 'unknown');
+// Rule-engine results count only criteria assessable from documentation; administrative ones (consent, ...) are
+// checked at screening. Model results keep met / all criteria.
+const metLabel = summary => summary.assessable != null
+  ? `${summary.counts.met}/${summary.assessable} posouditelných splněno`
+  : `${summary.counts.met}/${summary.total} kritérií splněno`;
+const percentTitle = summary => summary.assessable != null
+  ? `Splněno z kritérií posouditelných z dokumentace; ${summary.administrative} administrativních (souhlas apod.) ověří zkoušející. Chybějící údaj se nepočítá jako splněný. Nejde o pravděpodobnost způsobilosti.`
+  : 'Podíl splněných jednotlivých kritérií, nikoli pravděpodobnost způsobilosti';
+// Criteria within a study: met, not met, clinician review, missing (protocol order kept within a status).
+const criterionOrder = {met:0, not_met:1, unknown:2, missing:3};
+
 function renderMatches() {
-  const results = [...currentResults()].sort((first, second) => Number(first.summary.status === 'not_met') - Number(second.summary.status === 'not_met'));
+  const results = [...currentResults()].sort(byFit);
   const header = heading('Shoda se studiemi', `${escapeHtml(state.patient.name)} · ${escapeHtml(state.patient.id)} · Posouzení dostupných kritérií`);
   if (!results.length) return header + `<div class="empty-state">${icon('clipboard-search')}<h2>Pacient zatím nebyl posouzen</h2><p>Žádný výsledek neznamená vyloučení. Pro tohoto pacienta zatím není uložené porovnání.</p></div>`;
   if (!results.some(result=>result.trial_id===state.trialId)) state.trialId=results[0].trial_id;
   const result=results.find(item=>item.trial_id===state.trialId);
   const trial=trialById(state.trialId);
-  const visible=result.decisions.filter(decision=>state.filter==='all'||decision.status===state.filter);
-  return header + `<div class="matches-layout"><aside class="study-list" aria-label="Posouzené studie">${results.map(item=>{const study=trialById(item.trial_id);return `<button class="study-choice ${item.trial_id===state.trialId?'active':''}" data-trial="${escapeHtml(item.trial_id)}"><div class="study-protocol">${escapeHtml(study?.protocol||item.trial_id)}</div><div class="study-name">${escapeHtml(study?.title||'Klinická studie')}</div><div class="study-score"><span>${item.summary.counts.met}/${item.summary.total} kritérií splněno</span><strong title="Podíl splněných jednotlivých kritérií, nikoli pravděpodobnost způsobilosti">${item.summary.match_percent}%</strong></div>${resultProgress(item)}</button>`;}).join('')}</aside>
+  const visible=result.decisions.filter(decision=>state.filter==='all'||decision.status===state.filter).sort((first,second)=>criterionOrder[first.status]-criterionOrder[second.status]);
+  return header + `<div class="matches-layout"><aside class="study-list" aria-label="Posouzené studie">${results.map(item=>{const study=trialById(item.trial_id);return `<button class="study-choice ${item.trial_id===state.trialId?'active':''}" data-trial="${escapeHtml(item.trial_id)}"><div class="study-protocol">${escapeHtml(study?.protocol||item.trial_id)}</div><div class="study-name">${escapeHtml(study?.title||'Klinická studie')}</div><div class="study-score"><span>${metLabel(item.summary)}</span><strong title="${escapeHtml(percentTitle(item.summary))}">${item.summary.match_percent}%</strong></div>${resultProgress(item)}</button>`;}).join('')}</aside>
     <section class="match-detail"><div class="trial-head"><div class="eyebrow">${escapeHtml(trial?.protocol)} · ${state.mode==='demo'?'SYNTETICKÁ STUDIE':'REGISTROVANÁ STUDIE'}</div><h2>${escapeHtml(trial?.title)}</h2><div class="trial-links">${pill(result.summary.status)}${result.registry.url?`<a href="${escapeHtml(result.registry.url)}" target="_blank" rel="noreferrer">${escapeHtml(result.registry.nct_id||'Registr')} ${icon('external-link')}</a>`:''}<span class="muted">${result.registry.site_recruiting?'Nábor na pracovišti uveden v registru':'Nábor na pracovišti nepotvrzen'}</span></div></div>
     <div class="stats-strip">${Object.entries(result.summary.counts).map(([status,count])=>`<div class="stat ${status}"><b>${count}</b>${labels[status]}</div>`).join('')}</div>
     ${result.future_watch.map(watch=>`<div class="watch-banner"><strong>${icon('calendar-clock')}${escapeHtml(watch.text)}</strong><small>${escapeHtml(watch.caveat)}</small></div>`).join('')}
     <div class="filter-row"><h3>Podmínky účasti <span class="muted">(${result.summary.total})</span></h3><select id="criterion-filter" aria-label="Filtrovat stav kritérií"><option value="all">Všechny stavy</option>${Object.entries(labels).map(([value,label])=>`<option value="${value}" ${state.filter===value?'selected':''}>${label}</option>`).join('')}</select></div>
     <div>${visible.length?visible.map(decision=>renderCriterion(decision,result)).join(''):'<p class="empty-note">V tomto stavu nejsou žádná kritéria.</p>'}</div>
-    <div class="assessment-foot"><div>${result.summary.counts.met}/${result.summary.total} jednotlivých podmínek splněno. Skóre není pravděpodobnost způsobilosti; rozhoduje logika všech podmínek.</div><div>Snapshot: ${date(result.snapshot_at)} · Zpracováno: ${date(result.assessed_at)} · ${escapeHtml(result.model)}</div>${result.limitations.map(limit=>`<div>${escapeHtml(limit)}</div>`).join('')}</div></section></div>`;
+    <div class="assessment-foot"><div>${result.summary.counts.met}/${result.summary.total} jednotlivých podmínek splněno${result.summary.assessable != null ? ` (${result.summary.match_percent} % z ${result.summary.assessable} posouditelných z dokumentace; ${result.summary.administrative} administrativních ověří zkoušející)` : ''}. Skóre není pravděpodobnost způsobilosti; rozhoduje logika všech podmínek.</div><div>Snapshot: ${date(result.snapshot_at)} · Zpracováno: ${date(result.assessed_at)} · ${escapeHtml(result.model)}</div>${result.limitations.map(limit=>`<div>${escapeHtml(limit)}</div>`).join('')}</div></section></div>`;
 }
 
 function renderCriterion(decision,result) {
@@ -265,7 +281,7 @@ function tallyStrip(counts) {
 }
 
 function scoreCell(result) {
-  return `<div class="score-cell"><strong>${result.match_percent}%</strong><span class="muted">${result.counts.met}/${result.total}</span></div><div class="progress-track">${Object.entries(result.counts).map(([status,count]) => `<span class="bg-${status}" style="width:${100*count/(result.total||1)}%" title="${labels[status]}: ${count}"></span>`).join('')}</div>`;
+  return `<div class="score-cell"><strong title="${escapeHtml(percentTitle(result))}">${result.match_percent}%</strong><span class="muted">${result.counts.met}/${result.assessable ?? result.total}</span></div><div class="progress-track">${Object.entries(result.counts).map(([status,count]) => `<span class="bg-${status}" style="width:${100*count/(result.total||1)}%" title="${labels[status]}: ${count}"></span>`).join('')}</div>`;
 }
 
 function openButton(patientId, trialId) {

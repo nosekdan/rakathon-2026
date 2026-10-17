@@ -142,6 +142,8 @@ def result_summary(result: dict) -> dict:
         "trial_id": result["trial_id"],
         "assessed_at": result["assessed_at"],
         **{key: result["summary"][key] for key in ("status", "badge", "match_percent", "counts", "total")},
+        # Rule-engine results also say how many criteria were assessable from documentation.
+        **{key: result["summary"][key] for key in ("assessable", "administrative") if key in result["summary"]},
     }
 
 

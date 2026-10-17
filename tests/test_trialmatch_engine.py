@@ -95,3 +95,19 @@ def test_local_llm_never_excludes(monkeypatch, tmp_path):
     effusion = next(item["id"] for item in criteria["criteria"] if "pleural" in item["source"]["quote"])
     decision = next(d for d in result["decisions"] if d["criterion_id"] == effusion)
     assert decision["status"] == "unknown"
+
+
+def test_match_percent_counts_only_assessable_criteria(monkeypatch):
+    monkeypatch.setattr(repository, "patient_record", lambda *_: RECORD)
+    facts, criteria = facts_and_criteria()
+    criteria["criteria"].append({**criteria["criteria"][-1], "id": "E99", "requirement": "Nelze posoudit: consent",
+                                 "tm": {**criteria["criteria"][-1]["tm"], "id": "TEST-TRIAL:E99", "concept": None,
+                                        "evaluability": "not_assessable"}})
+    criteria["logic"]["children"].append({"op": "ref", "criterion_id": "E99"})
+    summary = engine.compare(TRIAL, facts, criteria, "trialmatch", "screen-v2")["summary"]
+    assert summary["administrative"] == 1 and summary["assessable"] == summary["total"] - 1
+    assert summary["match_percent"] == round(100 * summary["counts"]["met"] / summary["assessable"])
+    # silence about an exclusion stays "missing" and is not counted as met
+    decisions = engine.compare(TRIAL, facts, criteria, "trialmatch", "screen-v2")["decisions"]
+    effusion = next(item["id"] for item in criteria["criteria"] if "pleural" in item["source"]["quote"])
+    assert next(d for d in decisions if d["criterion_id"] == effusion)["status"] == "missing"
