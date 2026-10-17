@@ -1,0 +1,225 @@
+# TrialScreen: technická dokumentace
+
+Local hackathon prototype for clinician-reviewed oncology trial screening.
+FastAPI backend, plain JavaScript frontend, uv-managed Python environment.
+
+## Run
+
+```sh
+uv sync
+uv run uvicorn main:app --host 127.0.0.1 --port 8765
+```
+
+Open http://127.0.0.1:8765 (API docs: `/api/docs`). Put the supplied patient dataset directory
+(`rakathon-dataset-*/`) and the study workbook (`*.xlsx`) in this folder, and copy `.env.example` to
+`.env` with the organizer's `API_KEY`. Never put the key in frontend code. No patient inputs, workbook,
+derived outputs or credentials belong in Git.
+
+**Local rule engine, no API key.** `scripts/run_trialmatch.sh` precomputes all C61/C64 patients against their
+workbook studies with the rule engine (`trialmatch`, see below) into `.cache/trialmatch.sqlite3` and starts the
+app on port 8765. Nothing leaves the machine except the ClinicalTrials.gov lookups of study identifiers. The first
+run links the studies to the registry and screens every patient (a few minutes); later runs reuse the cache.
+
+```sh
+scripts/run_trialmatch.sh                   # rules only
+scripts/run_trialmatch.sh --download-model  # once: llama.cpp + Qwen2.5-3B into ~/opt (≈2 GB, checksums verified)
+scripts/run_trialmatch.sh --llm 3           # rules + local LLM for the 3 best-documented patients per diagnosis
+scripts/run_trialmatch.sh --stop            # stop the local LLM
+```
+
+`--download-model` fetches the Linux x86_64 build of llama.cpp. On other systems run any OpenAI-compatible local
+server (e.g. Ollama) and set `TM_LLM_BASE_URL` / `TM_LLM_MODEL`, or use the rules only.
+
+The **Syntetické demo** switch needs no data or API calls and shows all four criterion states and the alert.
+
+**Demo database.** Without the workbook or an API key, `uv run python seed_demo.py` writes a separate
+`.cache/demo-seed.sqlite3`: five invented studies (marked `UKAZKA-…`) and, for 80 real patients (`--count` to change), facts picked by
+rules (no LLM) from their records with exact quotes, plus rule-based comparisons. Start the app on it with
+`TRIALSCREEN_DB=.cache/demo-seed.sqlite3 uv run uvicorn main:app --host 127.0.0.1 --port 8765`. The real cache
+is never touched. Rerunning the seed resets the file, clinician edits included.
+
+**Start page (simulated NIS).** The app opens on a simulated hospital system ("UNIS") with the patient list and
+the patient's record. It shows only inputs (cohort, FHIR documents, labs); TrialScreen appears only as the
+**Klinické studie** widget, shown when at least one recruiting study does not exclude the patient (unclear or
+missing criteria still count: the model never excludes, the doctor decides). Clicking it opens **Shoda se
+studiemi** in a separate full-screen window, with the patient card (diagnoses, key metrics, notes and labs on
+click) above the matches. Results are precomputed (`precompute.py`, `precompute_trialmatch.py`), there is no
+on-demand screening button. Open a patient with `/?patient=PAC-…` or from **Data a ladění**, linked in the footer.
+
+Clinician review. Every change is stored in the `edits` table next to the extraction, which is never overwritten,
+and applied when results are read:
+
+- **Criteria of a patient.** Next to each criterion's status the clinician confirms the screening's answer, or
+  answers an open criterion as met / not met; the match is recomputed.
+- **Diagnoses of a patient.** The patient card lists the ICD-10 codes. Once a clinician confirms (or corrects)
+  them, only studies for the same ICD-10 category, or with no recognisable diagnosis, are paired with the patient.
+  Unconfirmed diagnoses never hide a study.
+- **Criteria of a study.** In **Přehled databáze** a clinician confirms a study's criteria, removes or edits a
+  criterion, or adds one; added text is structured by the rule engine and evaluated for every compared patient in
+  a background job. Any change needs a new confirmation; a shield icon marks confirmed studies and patients.
+- **Facts of a patient.** Values can be corrected in edit mode and all facts confirmed at once.
+
+**Přehled databáze** (navbar of the study window) lists every study and patient in the database, with the
+patients of a study grouped as candidates / near / future / other.
+
+## How it works
+
+Three stages, each cached by a hash of exactly what it sends to the model. A stage reruns only when
+its input, its model deployment or `pipeline.VERSION` changes.
+
+1. **Patient → facts** (`extract_patient`). Selected FHIR/CSV sources go to the model once per patient.
+   It returns dated facts, each with a quote that must be found in the source. Facts with quotes
+   that cannot be located are dropped (and mark the extraction incomplete). The rest get IDs `F1…Fn`.
+2. **Study → criteria** (`resolve_trial`, `extract_trial`). The workbook protocol is matched to exactly
+   one ClinicalTrials.gov study by identifier, never by title. Its eligibility text is extracted once
+   into normalized criteria plus an AND/OR tree. A criterion whose quote cannot be located is **kept**
+   and flagged, since dropping it would make the study look easier to enter.
+3. **Compare** (`compare`). The model sees only the structured facts and criteria (no raw documents)
+   and must cite facts by ID. A `met`/`not_met` without a valid citation becomes `unknown`. The
+   AND/OR result is evaluated in code; evidence shown in the UI is the cited facts' source spans.
+
+Studies are linked to ClinicalTrials.gov on demand the first time they are screened, because the workbook
+has no eligibility text. **Data a ladění → Propojit registry** refreshes all 79 (status, sites, criteria
+text). Requests are sequential and paced, since the registry answers bursts with HTTP 429, so this takes
+a few minutes. Recruitment status is read from the registry at display time, so a status change updates the alert
+without invalidating any extraction.
+
+All outputs live in one SQLite file, `.cache/trialscreen.sqlite3`. The tables `registry`, `facts`,
+`criteria` and `matches` each hold key → JSON. These views help with inspection:
+
+```sh
+sqlite3 .cache/trialscreen.sqlite3 'SELECT patient_id, name, value, quote FROM patient_facts LIMIT 20;'
+sqlite3 .cache/trialscreen.sqlite3 'SELECT trial_id, criterion_id, role, requirement FROM study_criteria;'
+sqlite3 .cache/trialscreen.sqlite3 'SELECT patient_id, trial_id, status, match_percent FROM pair_results;'
+```
+
+| File | Role |
+| --- | --- |
+| `repository.py` | Read the cohort CSV, FHIR bundles and workbook; select sources within a 90k-char budget |
+| `screening.py` | Pydantic schemas and pure logic: quote location, AND/OR evaluation, verification, alert |
+| `pipeline.py` | Registry lookup, model calls and the three cached stages |
+| `storage.py` | The SQLite store |
+| `main.py` | HTTP API and the background job runner |
+| `precompute.py` | CLI for batch precomputation |
+| `engine_trialmatch.py`, `trialmatch/` | Rule engine (lexicons, rules, deterministic comparison) behind the same three stages |
+| `precompute_trialmatch.py`, `scripts/run_trialmatch.sh` | Precompute and run the app on the rule engine (and the local LLM) |
+
+## Rule engine (trialmatch)
+
+Any stage can run on a deterministic rule engine instead of a language model. It needs no API key, no patient data
+leaves the machine, and it takes about 0.1 s per patient and 0.05 s per comparison on a laptop CPU. Select it like
+a deployment in `.env`:
+
+```sh
+PATIENT_MODEL_DEPLOYMENT=trialmatch
+TRIAL_MODEL_DEPLOYMENT=trialmatch
+MODEL_DEPLOYMENT=trialmatch            # or trialmatch+llm, see below
+uv run python precompute.py --patient PAC-… --trial ARASTEP --compare --max-new 1000 --execute
+```
+
+Results have exactly the shape of the model stages (same keys, tables, UI, clinician edits and benchmark), so the
+two can be compared side by side. `engine_trialmatch.py` adapts the engine in `trialmatch/`:
+
+- **Patient → facts.** Czech/English lexicons and rules (`trialmatch/lexicon/*.yaml`) read every note. The
+  lexicons map concepts, drugs to ATC classes and labs to units and ULN. The rules detect sections (family history
+  is not about the patient), negation and uncertainty (`bez meta`, `susp.`, `doporučujeme zahájit`). Structured
+  labs keep their reference ranges for ×ULN criteria. Every fact is an exact located quote, with one fact per piece
+  of evidence a comparison can cite.
+- **Study → criteria.** Registry text is split into atomic criteria, which the rules map to machine-readable
+  conditions: ECOG ≤ n, lab thresholds with unit conversion, metastases, prior therapy classes, comorbidities, and
+  age/sex/diagnosis gates. Criteria the rules cannot structure are kept as `Nestrukturováno: …` (→ `missing`), and
+  administrative ones as `Nelze posoudit z dokumentace` (→ `unknown`). The diagnosis gate comes from the workbook.
+- **Compare.** Deterministic code (thresholds, units, time windows). "Not found" is `missing`, never `met`.
+  Exclusions with extra conditions ("active", "with new lesions") become `unknown` rather than `not_met`.
+- **`trialmatch+llm`** lets a local model judge the unstructured criteria from retrieved sentences of the
+  patient's notes. Set `TM_LLM_BASE_URL` (any OpenAI-compatible endpoint, e.g. Ollama `http://127.0.0.1:11434/v1`)
+  and `TM_LLM_MODEL`. Non-local hosts are refused. An answer without a verbatim quote is discarded, and a "no" from
+  the model becomes `unknown`, so the local model never excludes a patient.
+
+`trials/` holds the public registry data the rules were developed on:
+
+- `raw/`: ClinicalTrials.gov records for all 79 workbook studies.
+- `criteria/`: the rule-structured drafts.
+- `mapping.csv`: manual NCT matches for the 7 protocols that cannot be matched by identifier, e.g. CA071-1000-004.
+  `resolve_trial` does not use it yet, so those studies are still skipped by `precompute.py`.
+
+Known limits of this proof of concept:
+
+- A spot check of 110 rule hits gave precision of 10/10 for prior ARPI, cardiac and autoimmune history, and 8–9/10
+  for bone/liver metastases and CRPC.
+- Precision was only 3–5/10 for brain metastases, ILD/pneumonitis, hepatitis and BRCA/HRR, where lesion words, lab
+  orders and vaccinations are read as diagnoses.
+- About a quarter of criteria stay unstructured without the local model.
+- Clinicians review every result; the engine never decides enrolment.
+
+## Precompute
+
+Dry run by default. `--max-new` caps uncached model calls (default 2). The SDK and schema repair can
+each add a retry, so it is not a strict request or spending limit. Studies not yet in the local registry
+cache are looked up on ClinicalTrials.gov first (only protocol IDs are sent).
+
+```sh
+uv run python precompute.py --patient PATIENT_ID --trial MK-5684-004 --compare
+uv run python precompute.py --patient PATIENT_ID --trial MK-5684-004 --compare --max-new 3 --execute
+```
+
+It prints one JSON line per item with timings, stops at the first failure and exits nonzero. Error
+messages are never printed (they can echo clinical text), only error types.
+
+A stage can run on a local model instead: set its deployment to `ollama:<model>`, e.g.
+`PATIENT_MODEL_DEPLOYMENT=ollama:qwen2.5:7b` (needs `ollama serve` and `ollama pull qwen2.5:7b`). Output is
+constrained to the JSON schema while decoding; inputs longer than `OLLAMA_CONTEXT` (default 32768 tokens)
+are refused rather than silently cut. Qwen 2.5 7B could not produce a valid criteria AND/OR tree for study
+extraction, so keep `TRIAL_MODEL_DEPLOYMENT` on a cloud model (registry text is public).
+
+`MODEL_DEPLOYMENT` is the comparison/default deployment. `PATIENT_MODEL_DEPLOYMENT` and
+`TRIAL_MODEL_DEPLOYMENT` optionally override the extraction stages. Restart the app after changes.
+
+Pilot measurements on Sol: about 13k selected characters took 117 s; about 41k timed out after two
+180-second attempts. Large patients need smaller source selection or chunked extraction.
+
+## Benchmark
+
+`benchmark.py` compares results with real-world decisions in `studie_ground_truth.csv` in
+the repository. Each case
+pins a workbook study. The patient is evaluated as documented the day before any record first names the
+study (protocol number, code or acronym), with undated records and all-time cohort summaries removed.
+Cases are skipped when the study is named in the patient's earliest record, when no record names it (set
+`as_of` by hand), or when no clinical notes precede the cut-off.
+
+```sh
+uv run python benchmark.py            # dry run: leak check, cache status
+uv run python benchmark.py --execute --positive  # enrolled/offered patients only, with a summary table
+uv run python benchmark.py --execute --patient PAC-XXXXXXXXXX  # run one case (add --json for raw output)
+```
+
+Verdicts for enrolled/offered patients: `HIT` (met), `OPEN` (not excluded, open criteria to review),
+`MISS` (wrongly excluded).
+
+## Interpretation and privacy
+
+- `met`: supported; `not_met`: contradicted; `unknown`: ambiguity requiring review;
+  `missing`: absent or outdated information. Missing is not negative evidence.
+- The percentage is individual criteria met, not an eligibility probability. An unsuccessful OR
+  branch is not itself exclusion. A re-screening trigger is not a promise of future eligibility.
+- Comparison quality depends on fact extraction recall: anything not extracted shows as `missing`,
+  never as `not_met`.
+- Exact-quote validation verifies provenance, not clinical reasoning. The prototype is not validated
+  clinical decision support or enrollment approval.
+- Dataset dates are shifted. Recency uses the patient's latest record, not today. Names and absent
+  ages are not invented. Incomplete source coverage is disclosed and suppresses the positive alert.
+- Patient data is pseudonymized, not anonymous. With a model deployment, extraction sends selected records to the
+  organizer's configured cloud API; the rule engine and the local LLM (`trialmatch`, `trialmatch+llm`) keep
+  everything on the machine. Registry requests contain only study identifiers.
+- Keep the server on localhost; there is no authentication. `.cache/` holds sensitive derived records
+  and must be protected like the inputs. Delete the dataset and caches after the event in accordance
+  with the dataset README.
+
+## Checks
+
+```sh
+uv run pytest -q
+uv run ruff check .
+```
+
+The private-data integration test skips when the dataset/workbook is absent; all others are synthetic.
