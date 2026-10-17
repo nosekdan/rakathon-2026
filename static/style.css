@@ -166,3 +166,4 @@ body.nis-mode .trial-widget{font-family:"Inter",system-ui,sans-serif}
 .study-dx-note{font-size:9px;color:var(--amber);margin-top:6px}
 @media (max-width:1150px){.dx-block{margin:0 20px}}
 .match-detail>.trial-widget{width:420px;max-width:100%;margin:0 0 16px auto}.match-detail>.patient-card{margin-bottom:12px}
+.study-divider{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:650;color:var(--green);text-transform:uppercase;letter-spacing:.04em;padding:4px 2px}.study-divider svg{width:13px;height:13px}.study-divider.muted{color:var(--muted);border-top:1px solid var(--line);padding-top:14px;margin-top:6px;text-transform:none;letter-spacing:0;font-weight:500}
