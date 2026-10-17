@@ -2,6 +2,7 @@ import asyncio
 import secrets
 from collections import Counter
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -24,7 +25,7 @@ from pipeline import (
     resolve_trial,
     trial_input,
 )
-from repository import patient_record, patients, patients_by_id, trials, trials_by_id
+from repository import DATASET, patient_record, patients, patients_by_id, trials, trials_by_id
 from screening import STATUSES, Logic, TrialExtraction, badge, evaluate_logic
 
 app = FastAPI(title="TrialScreen", docs_url="/api/docs")
@@ -62,21 +63,52 @@ def load_patient(patient_id: str) -> dict:
         raise HTTPException(404, "Patient not found") from None
 
 
-def cached_results(record: dict) -> list[dict]:
-    """Saved comparisons whose facts and criteria still match the current inputs, assembled for the UI."""
-    facts = storage.get("facts", patient_input(record)["key"])
+# Criteria are stored under a hash of their input, so a key always names the same content and can be kept in memory.
+_criteria_cache: dict[str, tuple[dict, TrialExtraction]] = {}
+
+
+def criteria_by_key(key: str) -> tuple[dict, TrialExtraction] | None:
+    if key not in _criteria_cache:
+        criteria = storage.get("criteria", key)
+        if not criteria:
+            return None
+        _criteria_cache[key] = (criteria, TrialExtraction.model_validate(criteria))
+    return _criteria_cache[key]
+
+
+@lru_cache(maxsize=4096)
+def _facts_key(patient_id: str, mtime: int) -> str:
+    return patient_input(load_patient(patient_id))["key"]
+
+
+def facts_key(patient_id: str) -> str:
+    """The facts key of a patient without re-reading the record while its FHIR file is unchanged."""
+    path = DATASET / "fhir" / f"{patient_id}.json" if DATASET else None
+    return _facts_key(patient_id, path.stat().st_mtime_ns if path and path.exists() else 0)
+
+
+def cached_results(record: dict, facts: dict | None = None, registries: dict | None = None) -> list[dict]:
+    """Saved comparisons whose facts and criteria still match the current inputs, assembled for the UI.
+
+    record needs only "id" and "deceased"; facts and registries may be passed in to avoid repeated reads.
+    """
+    if facts is None:
+        key = patient_input(record)["key"] if "sources" in record else facts_key(record["id"])
+        facts = storage.get("facts", key)
     if not facts:
         return []
     results = []
+    overrides = decision_edits(record["id"])
     for match in storage.by_owner("matches", record["id"]):
-        registry = storage.get("registry", match["trial_id"])
+        registry = registries.get(match["trial_id"]) if registries is not None else \
+            storage.get("registry", match["trial_id"])
         if match["trial_id"] not in trials_by_id() or not registry or registry["state"] != "resolved":
             continue
-        criteria = storage.get("criteria", trial_input(registry)["key"])
-        if not criteria or not match_is_current(match, facts["key"], criteria["key"]):
+        cached = criteria_by_key(trial_input(registry)["key"])
+        if not cached or not match_is_current(match, facts["key"], cached[0]["key"]):
             continue
-        match = apply_decision_edits(match, criteria, decision_edits(record["id"]))
-        extraction = TrialExtraction.model_validate(criteria)
+        criteria, extraction = cached
+        match = apply_decision_edits(match, criteria, overrides)
         # Recruitment can change without invalidating the comparison, so the alert is decided at read time.
         alert = badge(
             match["summary"]["status"],
@@ -208,11 +240,12 @@ def overview():
     # Benchmark comparisons are keyed "patient:trial@date" and never shown in the UI.
     owners = {match["patient_id"] for key, match in storage.rows("matches").items() if "@" not in key}
     owners |= {facts["patient_id"] for facts in storage.rows("facts").values() if not facts.get("as_of")}
+    registries = storage.rows("registry")
     entries = []
     for patient_id in sorted(owners & patients_by_id().keys()):
-        record = load_patient(patient_id)
-        facts = current_facts(record)
-        results = cached_results(record)
+        facts = storage.get("facts", facts_key(patient_id))
+        summary = patients_by_id()[patient_id]
+        results = cached_results({"id": patient_id, "deceased": summary["deceased"]}, facts, registries)
         if not facts and not results:
             continue
         reviewed = edits(patient_id, facts["key"]).values() if facts else []
@@ -225,7 +258,6 @@ def overview():
                 "results": [result_summary(result) for result in results],
             }
         )
-    registries = storage.rows("registry")
     studies = []
     for trial in trials():
         registry = registries.get(trial["id"])
