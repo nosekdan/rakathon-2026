@@ -293,12 +293,16 @@ def compare(trial: dict, facts: dict, criteria: dict, deployment: str, model_ver
     trial_icd = next((c.value for c in ours if c.concept == "diagnosis"), []) or []
     results = [evaluate(c, profile, trial_icd) for c in ours]
     if deployment.endswith("+llm"):
+        from trialmatch.config import NOTIFY_MIN
         from trialmatch.extract.retrieve import SentenceIndex
         from trialmatch.match import score_results
 
-        notes = [(s["id"], (s.get("date") or "")[:10] or None, s["text"]) for s in record["sources"].values()
-                 if s["kind"] in ("DocumentReference", "DiagnosticReport")]
-        results = fill_with_llm(score_results({"icd_prefixes": trial_icd}, results), SentenceIndex(notes)).results
+        ruled = score_results({"icd_prefixes": trial_icd}, results)
+        # The local model is slow on CPU (~5 s per criterion): only spend it on promising pairs.
+        if not ruled.gate_failed and ruled.rank >= NOTIFY_MIN:
+            notes = [(s["id"], (s.get("date") or "")[:10] or None, s["text"]) for s in record["sources"].values()
+                     if s["kind"] in ("DocumentReference", "DiagnosticReport")]
+            results = fill_with_llm(ruled, SentenceIndex(notes)).results
     fact_ids = {fact["tm"]["key"]: fact["id"] for fact in facts["facts"] if fact.get("tm")}
     decisions = [_decision(item["id"], r, fact_ids) for item, r in zip(criteria["criteria"], results)]
     extraction = TrialExtraction.model_validate(criteria)
