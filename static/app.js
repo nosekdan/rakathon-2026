@@ -512,8 +512,9 @@ function renderOverviewTrials() {
   const {patients, trials} = state.overview;
   const rowsFor = trialId => patients.flatMap(entry => entry.results.filter(result => result.trial_id === trialId).map(result => ({patient:patientSummary(entry.id) || {id:entry.id, name:entry.id}, result}))).sort(byOutcome);
   const filter = {all:() => true, open:trial => openStatuses.includes(trial.registry?.status), candidates:trial => rowsFor(trial.id).some(row => isCandidate(row.result))}[state.overviewFilter] || (() => true);
+  // Studies with criteria confirmed by a clinician first, then by candidates.
   const listed = trials.filter(trial => filter(trial) && searchHit([trial.protocol, trial.title, trial.diagnosis, trial.sponsor, trial.registry?.nct_id])).map(trial => ({trial, rows:rowsFor(trial.id)}))
-    .sort((first, second) => second.rows.filter(row => isCandidate(row.result)).length - first.rows.filter(row => isCandidate(row.result)).length || second.rows.length - first.rows.length || Number(Boolean(second.trial.criteria)) - Number(Boolean(first.trial.criteria)));
+    .sort((first, second) => Number(Boolean(second.trial.criteria_review?.verified)) - Number(Boolean(first.trial.criteria_review?.verified)) || second.rows.filter(row => isCandidate(row.result)).length - first.rows.filter(row => isCandidate(row.result)).length || second.rows.length - first.rows.length || Number(Boolean(second.trial.criteria)) - Number(Boolean(first.trial.criteria)));
   if (!trials.length) return `<p class="empty-note">V databázi zatím nejsou žádné studie. Vložte workbook studií (*.xlsx) do projektové složky, nebo spusťte ukázková data (seed_demo.py).</p>`;
   if (!listed.length) return `<p class="empty-note">Žádná studie neodpovídá hledání.</p>`;
   if (!listed.some(item => item.trial.id === state.overviewTrial)) state.overviewTrial = listed.find(item => item.trial.id === state.trialId)?.trial.id || listed[0].trial.id;
