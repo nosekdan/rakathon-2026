@@ -17,6 +17,17 @@ derived outputs or credentials belong in Git.
 
 The **Syntetické demo** switch needs no data or API calls and shows all four criterion states and the alert.
 
+**Demo database.** Without the workbook or an API key, `uv run python seed_demo.py` writes a separate
+`.cache/demo-seed.sqlite3`: five invented studies (marked `UKAZKA-…`) and, for 14 real patients, facts picked by
+rules (no LLM) from their records with exact quotes, plus rule-based comparisons. Start the app on it with
+`TRIALSCREEN_DB=.cache/demo-seed.sqlite3 uv run uvicorn main:app --host 127.0.0.1 --port 8765`. The real cache
+is never touched. Rerunning the seed resets the file, clinician edits included.
+
+**Přehled databáze** (navbar of the study window) lists every study and patient in the database. Studies show
+their criteria; patients show the facts we extracted. Clinicians can correct a value or criterion and confirm it;
+edits are stored in the `edits` table next to the extraction, which is never overwritten. They do not yet
+feed back into comparisons.
+
 The patient card shows a **Klinické studie** widget when at least one precomputed study does not exclude
 the patient (unclear or missing criteria still count: the model never excludes, the doctor decides).
 Clicking it opens **Shoda se studiemi** in a separate window. Results are precomputed (`precompute.py`),

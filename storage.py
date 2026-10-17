@@ -1,12 +1,15 @@
 """One local SQLite file. Every table is key -> JSON payload, with an indexed owner (patient or trial ID)."""
 
 import json
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-PATH = Path(__file__).parent / ".cache" / "trialscreen.sqlite3"
-TABLES = ("registry", "facts", "criteria", "matches")
+# TRIALSCREEN_DB selects another file, e.g. the synthetic demo database written by seed_demo.py.
+PATH = Path(__file__).parent / os.getenv("TRIALSCREEN_DB", ".cache/trialscreen.sqlite3")
+# studies: trials added outside the workbook. edits: clinician corrections and confirmations.
+TABLES = ("registry", "facts", "criteria", "matches", "studies", "edits")
 SCHEMA = "".join(
     f"CREATE TABLE IF NOT EXISTS {table} (key TEXT PRIMARY KEY, owner TEXT NOT NULL, "
     "payload TEXT NOT NULL CHECK(json_valid(payload)), saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"

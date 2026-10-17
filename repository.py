@@ -10,6 +10,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+import storage
+
 ROOT = Path(__file__).parent
 DATASET = next(ROOT.glob("rakathon-dataset-*/"), None)
 SOURCE_BUDGET = 90_000
@@ -63,6 +65,13 @@ def trial_slug(protocol: str) -> str:
 
 @lru_cache(maxsize=1)
 def trials() -> list[dict]:
+    """Workbook studies, then studies stored in the database (the workbook wins on a shared ID)."""
+    workbook = workbook_trials()
+    known = {trial["id"] for trial in workbook}
+    return workbook + [study for study in storage.rows("studies").values() if study["id"] not in known]
+
+
+def workbook_trials() -> list[dict]:
     path = next(ROOT.glob("*.xlsx"), None)
     if not path:
         return []
