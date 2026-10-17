@@ -624,7 +624,6 @@ document.addEventListener('click',async event=>{
     if(button.dataset.patient){state.view='nis';await selectPatient(button.dataset.patient);}
     if(button.dataset.groupMore){state.groupsOpen.add(button.dataset.groupMore);render();}
     if(button.dataset.action==='toggle-strip'){state.stripOpen=!state.stripOpen;render();}
-    if(button.dataset.action==='open-trialscreen'){const opened=window.open(`/?${new URLSearchParams({view:'overview',mode:state.mode,patient:state.patient.id})}`,'trialscreen-matches','popup,width=1180,height=860');opened?.focus();}
     if(button.dataset.debugTrial){const trial=state.mode==='demo'?trialById(button.dataset.debugTrial):await api(`/api/trials/${encodeURIComponent(button.dataset.debugTrial)}`);document.querySelector('#source-title').textContent=trial.protocol;document.querySelector('#source-meta').textContent='Zdrojová metadata studie';document.querySelector('#source-text').textContent=JSON.stringify(trial,null,2);document.querySelector('#source-dialog').showModal();}
     if(button.dataset.action==='open-matches')openMatchesWindow();
     if(button.dataset.action==='registry')await startJob({kind:'registry'});
