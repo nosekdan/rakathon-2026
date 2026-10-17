@@ -165,4 +165,4 @@ body.nis-mode .trial-widget{font-family:"Inter",system-ui,sans-serif}
 .dx-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dx-actions input{min-width:200px}
 .study-dx-note{font-size:9px;color:var(--amber);margin-top:6px}
 @media (max-width:1150px){.dx-block{margin:0 20px}}
-.match-detail>.trial-widget{width:100%;max-width:none;margin:0 0 20px}.match-detail>.patient-card{margin-bottom:12px}
+.match-detail>.trial-widget{width:420px;max-width:100%;margin:0 0 16px auto}.match-detail>.patient-card{margin-bottom:12px}
