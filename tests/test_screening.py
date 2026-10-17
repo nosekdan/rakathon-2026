@@ -275,12 +275,9 @@ def test_stages_cache_by_input_and_compare_from_facts(monkeypatch):
     assert main.overview()["patients"][0]["verified"] == 1
     with pytest.raises(main.HTTPException):
         main.edit_fact("synthetic", "F9", main.Edit(verified=True))
-    monkeypatch.setattr(main, "trials_by_id", lambda: {"T-1": TRIAL})
-    main.edit_criterion("T-1", "ecog", main.Edit(value="ECOG 0-2"))
-    main.review_trial("T-1", main.Edit(verified=True))
-    detail = main.get_trial_detail("T-1")
-    assert detail["criteria"]["criteria"][1]["edit"]["value"] == "ECOG 0-2"
-    assert detail["review"]["verified"]
+    main.confirm_facts("synthetic", main.Confirmation(verified=False))
+    [fact] = main.get_facts("synthetic")["facts"]
+    assert fact["edit"]["value"] == "2" and not fact["edit"]["verified"], "confirming keeps corrections"
     monkeypatch.setattr(pipeline, "MODEL", "other")
     monkeypatch.setattr(main, "match_is_current", pipeline.match_is_current)
     assert main.cached_results(RECORD) == []
@@ -428,10 +425,25 @@ def test_demo_is_self_consistent():
     from demo import demo_data
 
     data = demo_data()
-    assert [result["summary"]["badge"] for result in data["patient"]["results"]] == [True, False, False]
-    for result in data["patient"]["results"]:
-        for decision in result["decisions"]:
-            assert all(evidence["start"] >= 0 for evidence in decision["evidence"])
+    badges = {result["trial_id"]: result["summary"]["badge"] for result in data["patient"]["results"]}
+    assert badges == {"DEMO-01": True, "DEMO-02": False, "DEMO-03": False, "DEMO-05": False}
+    closed = next(result for result in data["patient"]["results"] if result["trial_id"] == "DEMO-05")
+    assert closed["summary"]["status"] == "met", "a closed study can match but never raises the alert"
+    assert data["patient"]["results"][1]["future_watch"], "patient A is blocked only by progression"
+    assert len(data["patients"]) == 12
+    statuses = set()
+    for patient in data["patients"]:
+        text = patient["sources"][0]["text"]
+        cited = [fact["evidence"] for fact in patient["facts"]]
+        cited += [
+            evidence
+            for result in patient["results"]
+            for d in result["decisions"]
+            for evidence in d["evidence"]
+        ]
+        assert all(text[item["start"] : item["end"]] == item["quote"] for item in cited)
+        statuses |= {result["summary"]["status"] for result in patient["results"]}
+    assert statuses == {"met", "not_met", "unknown", "missing"}
 
 
 def test_real_import_preserves_identifiers_and_sources():

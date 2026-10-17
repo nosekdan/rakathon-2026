@@ -231,6 +231,28 @@ def save_edit(owner: str, scope: str, ref: str, edit: Edit) -> dict:
     return payload
 
 
+class Confirmation(BaseModel):
+    verified: bool = True
+
+
+@app.put("/api/patients/{patient_id}/facts")
+def confirm_facts(patient_id: str, confirmation: Confirmation):
+    """Confirm (or unconfirm) every fact at once, keeping any value the clinician has corrected."""
+    facts = current_facts(load_patient(patient_id))
+    if not facts:
+        raise HTTPException(404, "Facts not extracted")
+    corrections = edits(patient_id, facts["key"])
+    return {
+        fact["id"]: save_edit(
+            patient_id,
+            facts["key"],
+            fact["id"],
+            Edit(value=corrections.get(fact["id"], {}).get("value"), verified=confirmation.verified),
+        )
+        for fact in facts["facts"]
+    }
+
+
 @app.put("/api/patients/{patient_id}/facts/{fact_id}")
 def edit_fact(patient_id: str, fact_id: str, edit: Edit):
     facts = current_facts(load_patient(patient_id))
@@ -255,42 +277,7 @@ def get_trial_detail(trial_id: str):
     if trial is None:
         raise HTTPException(404, "Trial not found")
     registry = storage.get("registry", trial_id)
-    criteria = current_criteria(registry)
-    corrections = edits(trial_id, criteria["key"]) if criteria else {}
-    return {
-        **trial,
-        "registry": registry,
-        "criteria": {
-            **criteria,
-            "criteria": [{**item, "edit": corrections.get(item["id"])} for item in criteria["criteria"]],
-        }
-        if criteria
-        else None,
-        # Study-level confirmation that the extracted criteria were checked by a clinician.
-        "review": corrections.get("study"),
-    }
-
-
-def trial_criteria(trial_id: str) -> dict:
-    if trial_id not in trials_by_id():
-        raise HTTPException(404, "Trial not found")
-    criteria = current_criteria(storage.get("registry", trial_id))
-    if not criteria:
-        raise HTTPException(404, "Criteria not extracted")
-    return criteria
-
-
-@app.put("/api/trials/{trial_id}/criteria/{criterion_id}")
-def edit_criterion(trial_id: str, criterion_id: str, edit: Edit):
-    criteria = trial_criteria(trial_id)
-    if criterion_id not in {item["id"] for item in criteria["criteria"]}:
-        raise HTTPException(404, "Criterion not found")
-    return save_edit(trial_id, criteria["key"], criterion_id, edit)
-
-
-@app.put("/api/trials/{trial_id}/review")
-def review_trial(trial_id: str, edit: Edit):
-    return save_edit(trial_id, trial_criteria(trial_id)["key"], "study", Edit(verified=edit.verified))
+    return {**trial, "registry": registry, "criteria": current_criteria(registry)}
 
 
 class JobRequest(BaseModel):

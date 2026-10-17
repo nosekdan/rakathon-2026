@@ -61,17 +61,8 @@ body:not(.popup) .app-nav{display:none}
 .fact-table td:nth-child(2){min-width:140px}
 .fact-value{font-size:12px;font-weight:650;color:var(--ink)}
 .quote-cell{display:block;max-width:260px;font-style:italic}
-.row-verified td{background:#f6fbf8}
-.row-actions,.edit-actions{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
-.icon-button.verified{color:var(--green);background:var(--green-soft)}
 .tag-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .tag-row:empty{display:none}
-.editable-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
-.edit-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
-.edit-form input[name=value]{flex:1 1 260px;font-size:12px}
-.edit-form .primary-button,.edit-form .secondary-button{min-height:36px;padding:8px 12px}
-.edit-form .cell-subtitle{flex-basis:100%;margin-top:0}
-.check-label{display:inline-flex;align-items:center;gap:6px;font-size:11px}
 .review-banner{display:flex;align-items:center;gap:12px;margin-top:18px;padding:13px 16px;background:var(--amber-soft);border-left:3px solid #cbab71;font-size:11px}
 .review-banner>svg{color:var(--amber)}
 .review-banner span{flex:1;min-width:0}
@@ -87,3 +78,9 @@ body:not(.popup) .app-nav{display:none}
 }
 @media(min-width:851px){.study-list{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow:auto;padding-right:4px}
 }
+.editable{cursor:text;background:#fffdf3;box-shadow:inset 0 0 0 1px #efe3b8;border-radius:3px;padding:2px 4px;margin:-2px -4px;display:inline-block}
+.editable:hover{background:#fff8dc;box-shadow:inset 0 0 0 1px #e6d08f}
+.cell-input{width:100%;min-height:34px;padding:6px 8px;font-size:12px;font-weight:650;border:2px solid var(--green);background:#fff;outline:0}
+.cell-hint{display:block;font-size:9px;color:var(--muted);margin-top:4px}
+.criteria-list .cell-input{margin-bottom:4px}
+.review-banner .secondary-button,.review-banner .primary-button{flex-shrink:0}

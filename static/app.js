@@ -1,4 +1,4 @@
-const state = {data:null, patient:null, demo:null, mode:'real', view:'patient', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null};
+const state = {data:null, patient:null, demo:null, mode:'real', view:'patient', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
 const labels = {met:'Splněno', not_met:'Nesplněno', unknown:'Lidská kontrola', missing:'Chybí údaje'};
 const statusIcons = {met:'circle-check', not_met:'circle-x', unknown:'circle-help', missing:'file-question'};
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
@@ -48,7 +48,8 @@ function heading(title, subtitle, action='') {
 
 // Studies with no contradicted criterion. Unclear or missing data never hides a study:
 // the doctor decides, the model never excludes.
-const reviewable = () => currentResults().filter(result => result.summary.status !== 'not_met');
+const closedStatuses = ['COMPLETED', 'TERMINATED', 'WITHDRAWN', 'SUSPENDED', 'ACTIVE_NOT_RECRUITING'];
+const reviewable = () => currentResults().filter(result => result.summary.status !== 'not_met' && !closedStatuses.includes(result.registry?.status));
 
 function trialWidget() {
   const studies = reviewable();
@@ -71,8 +72,8 @@ function renderPatient() {
   const labPriority = lab => /hemoglobin|kreatinin|neutrofil|trombocyt|bilirubin|albumin|^PSA$/i.test(lab.name) ? 0 : typeof lab.value === 'number' ? 1 : 2;
   const displayedLabs = [...patient.latest_labs].sort((first,second)=>labPriority(first)-labPriority(second)).slice(0,7);
   const demographicsSource = patient.synthetic ? 'demo-note' : 'cohort';
-  const ageEvidence = {source_id:demographicsSource,quote:patient.synthetic ? 'Věk: 64 let' : patient.age ? `${String(patient.age).includes('-') ? 'vek_pasmo' : 'vek'}: ${patient.age}` : ''};
-  const genderEvidence = {source_id:demographicsSource,quote:patient.synthetic ? 'Pohlaví: muž' : `pohlavi: ${patient.sex}`};
+  const ageEvidence = patient.evidence?.age || {source_id:demographicsSource,quote:patient.age ? `${String(patient.age).includes('-') ? 'vek_pasmo' : 'vek'}: ${patient.age}` : ''};
+  const genderEvidence = patient.evidence?.sex || {source_id:demographicsSource,quote:`pohlavi: ${patient.sex}`};
   const metrics = [
     {name:'Pohlaví',value:patient.sex === 'male' ? 'Muž' : patient.sex === 'female' ? 'Žena' : 'Neuvedeno',icon:'user-round',evidence:genderEvidence},
     {name:'Věk',value:patient.age || '—',unit:patient.age ? 'let' : '',icon:'calendar-days',evidence:ageEvidence},
@@ -88,7 +89,7 @@ function renderPatient() {
     <div class="record-columns"><section><div class="section-heading">${icon('notebook-tabs')}<h3>Poslední záznamy</h3><span class="count">${patient.notes} zpráv</span></div>
       ${patient.recent_notes.length ? patient.recent_notes.slice(0,6).map(note=>`<button class="note-entry" data-source="${escapeHtml(note.id)}"><span class="note-date">${date(note.date)}</span><span><span class="note-title">${escapeHtml(note.title)}</span><span class="note-id">${escapeHtml(note.id)}</span></span>${icon('arrow-up-right')}</button>`).join('') : '<p class="empty-note">V dostupném exportu nejsou textové zprávy.</p>'}
       <div class="snapshot-note">${icon('clock-3')}Časové údaje odpovídají snapshotu dokumentace.</div></section>
-      <div><section><div class="section-heading">${icon('clipboard-plus')}<h3>Diagnózy v záznamu</h3>${evidenceButton({source_id:demographicsSource,quote:patient.synthetic?'Diagnóza: karcinom prostaty C61.':`diagnozy: ${patient.diagnoses}`},'Zdroj diagnóz')}</div>${patient.diagnoses ? patient.diagnoses.split(/[,;\s]+/).filter(Boolean).map(code=>`<div class="diagnosis-line"><span class="code-tag">${escapeHtml(code)}</span><span>${code.startsWith('C61')?'Zhoubný novotvar prostaty':code.startsWith('C64')?'Zhoubný novotvar ledviny':'Diagnóza MKN-10'}</span></div>`).join('') : '<p class="empty-note">Kódy nejsou v kohortě uvedeny.</p>'}</section>
+      <div><section><div class="section-heading">${icon('clipboard-plus')}<h3>Diagnózy v záznamu</h3>${evidenceButton(patient.evidence?.dx||{source_id:demographicsSource,quote:`diagnozy: ${patient.diagnoses}`},'Zdroj diagnóz')}</div>${patient.diagnoses ? patient.diagnoses.split(/[,;\s]+/).filter(Boolean).map(code=>`<div class="diagnosis-line"><span class="code-tag">${escapeHtml(code)}</span><span>${code.startsWith('C61')?'Zhoubný novotvar prostaty':code.startsWith('C64')?'Zhoubný novotvar ledviny':'Diagnóza MKN-10'}</span></div>`).join('') : '<p class="empty-note">Kódy nejsou v kohortě uvedeny.</p>'}</section>
       <section class="section-gap"><div class="section-heading">${icon('test-tubes')}<h3>Laboratorní výsledky</h3><span class="count">Poslední hodnoty</span></div>${displayedLabs.length ? `<table class="mini-table"><tbody>${displayedLabs.map(lab=>`<tr><td>${escapeHtml(lab.name)}<div class="cell-subtitle">${date(lab.date)}</div></td><td>${escapeHtml(lab.value)} <span class="muted">${escapeHtml(lab.unit)}</span></td><td>${evidenceButton({source_id:lab.source_id},`Zdroj: ${lab.name}`)}</td></tr>`).join('')}</tbody></table>` : '<p class="empty-note">Laboratorní hodnoty nejsou v dostupném záznamu doloženy.</p>'}</section></div></div>`;
 }
 
@@ -142,12 +143,17 @@ const inPlay = results => results.filter(result => outcome(result) !== 'not_met'
 const factGroups = [['zaklad','Základní údaje','user-round'], ['nador','Diagnóza a nádor','microscope'], ['laborator','Laboratoř','test-tubes'], ['lecba','Léčba','pill'], ['ostatni','Ostatní údaje','notebook-tabs']];
 // Model facts carry no category, so group them by name; seeded facts name theirs explicitly.
 const factCategory = fact => fact.category || (/věk|pohlaví|výšk|hmotnost|váha|ecog|who|bmi/i.test(fact.name) ? 'zaklad' : /diagn|histolog|stadi|tnm|gleason|metast|nádor|tumor|grade|mutac|brca|biomark|pd-?l1|hrr/i.test(fact.name) ? 'nador' : /léčb|terap|lék|chemo|radio|operac|chirurg|linie|režim|hormon|adt/i.test(fact.name) ? 'lecba' : /hemoglobin|hgb|trombo|plt|neutro|leuko|kreatinin|egfr|alt|ast|bilirubin|albumin|psa|testosteron|glukóz|laborat/i.test(fact.name) ? 'laborator' : 'ostatni');
-const patientSummary = identifier => (state.mode === 'demo' ? [state.demo.patient] : state.data.patients).find(patient => patient.id === identifier);
+const cohort = () => state.mode === 'demo' ? state.demo.patients : state.data.patients;
+const patientSummary = identifier => cohort().find(patient => patient.id === identifier);
 
 async function loadOverview() {
   if (state.mode === 'demo') {
-    const patient = state.demo.patient;
-    state.overview = {patients:[{id:patient.id, facts:null, verified:0, edited:0, results:patient.results.map(slimResult)}], trials:state.demo.trials.map(trial => ({...trial, criteria:patient.results.find(result => result.trial_id === trial.id)?.criteria.criteria.length ?? null}))};
+    // The synthetic cohort lives in the page, so demo edits change it in memory only.
+    const results = state.demo.patients.flatMap(patient => patient.results);
+    state.overview = {
+      patients:state.demo.patients.map(patient => ({id:patient.id, facts:patient.facts.length, verified:patient.facts.filter(fact => fact.edit?.verified).length, edited:patient.facts.filter(fact => fact.edit?.value).length, results:patient.results.map(slimResult)})),
+      trials:state.demo.trials.map(trial => ({...trial, criteria:results.find(result => result.trial_id === trial.id)?.criteria.criteria.length ?? null})),
+    };
   } else state.overview = await api('/api/overview');
 }
 
@@ -165,22 +171,82 @@ function detail(kind, identifier) {
 
 async function fetchDetail(kind, identifier) {
   if (state.mode === 'demo') {
-    if (kind === 'facts') return {facts:null};
-    return {...trialById(identifier), criteria:state.demo.patient.results.find(result => result.trial_id === identifier)?.criteria || null};
+    if (kind === 'facts') return {model:'Syntetická ukázka', snapshot_at:patientSummary(identifier).snapshot_at, complete:true, limitations:['Syntetický pacient. Úpravy v demu se neukládají.'], facts:patientSummary(identifier).facts};
+    const criteria = state.demo.patients.flatMap(patient => patient.results).find(result => result.trial_id === identifier)?.criteria;
+    return {...trialById(identifier), criteria:criteria ? structuredClone(criteria) : null};
   }
   return api(kind === 'facts' ? `/api/patients/${encodeURIComponent(identifier)}/facts` : `/api/trials/${encodeURIComponent(identifier)}`);
 }
 
-async function saveEdit(kind, ref, body) {
-  if (state.mode === 'demo') throw new Error('V syntetickém demu nelze údaje upravovat.');
-  const owner = kind === 'fact' ? state.overviewPatient : state.overviewTrial;
-  const path = kind === 'fact' ? `/api/patients/${encodeURIComponent(owner)}/facts/${encodeURIComponent(ref)}` : kind === 'criterion' ? `/api/trials/${encodeURIComponent(owner)}/criteria/${encodeURIComponent(ref)}` : `/api/trials/${encodeURIComponent(owner)}/review`;
-  await api(path, {method:'PUT', body:JSON.stringify(body)});
-  delete state.details[detailKey(kind === 'fact' ? 'facts' : 'trial', owner)];
-  state.editing = null;
-  await loadOverview();
+// Facts of the loaded patient detail, so saves update the page in place without reloading.
+function loadedFacts(owner) {
+  const record = state.details[detailKey('facts', owner)];
+  return record && !record.error ? record.facts || [] : [];
+}
+
+// Applies clinician changes ({F3: {value, verified}}) to the page first, then saves; rolls back on failure.
+async function saveFacts(changes, request) {
+  const owner = state.overviewPatient;
+  const facts = loadedFacts(owner).filter(fact => fact.id in changes);
+  const previous = new Map(facts.map(fact => [fact, fact.edit]));
+  const now = new Date().toISOString();
+  facts.forEach(fact => {fact.edit = {...fact.edit, ...changes[fact.id], edited_at:now};});
+  refreshEntry(owner);
   render();
-  toast('Uloženo. Původní extrakce zůstává zachována.');
+  if (state.mode === 'demo') return;
+  try {
+    const saved = await request(owner);
+    facts.forEach(fact => {fact.edit = saved[fact.id] || fact.edit;});
+  } catch (error) {
+    previous.forEach((edit, fact) => {fact.edit = edit;});
+    refreshEntry(owner);
+    render();
+    throw error;
+  }
+}
+
+// Recount the patient's list entry locally; reloading the whole overview is slow on real records.
+function refreshEntry(owner) {
+  const entry = state.overview?.patients.find(item => item.id === owner);
+  const facts = loadedFacts(owner);
+  if (!entry) return;
+  entry.verified = facts.filter(fact => fact.edit?.verified).length;
+  entry.edited = facts.filter(fact => fact.edit?.value !== null && fact.edit?.value !== undefined).length;
+}
+
+function saveFact(identifier, value) {
+  const fact = loadedFacts(state.overviewPatient).find(item => item.id === identifier);
+  const body = {value, verified:Boolean(fact?.edit?.verified)};
+  return saveFacts({[identifier]:body}, owner => api(`/api/patients/${encodeURIComponent(owner)}/facts/${encodeURIComponent(identifier)}`, {method:'PUT', body:JSON.stringify(body)}).then(edit => ({[identifier]:edit})));
+}
+
+function confirmAll(verified) {
+  const changes = Object.fromEntries(loadedFacts(state.overviewPatient).map(fact => [fact.id, {value:fact.edit?.value ?? null, verified}]));
+  return saveFacts(changes, owner => api(`/api/patients/${encodeURIComponent(owner)}/facts`, {method:'PUT', body:JSON.stringify({verified})}));
+}
+
+// Spreadsheet-style editing once "Upravit" is on: click a value, Enter or Tab saves and moves on,
+// Esc cancels, clicking elsewhere saves. An emptied cell goes back to the extracted value.
+function editableValue(ref, current, original) {
+  if (!state.editMode) return `<span class="fact-value">${escapeHtml(current)}</span>`;
+  if (state.editing !== ref) return `<span class="fact-value editable" data-cell="${escapeHtml(ref)}" title="Kliknutím upravíte">${escapeHtml(current)}</span>`;
+  return `<input class="cell-input" data-cell-input="${escapeHtml(ref)}" data-original="${escapeHtml(original)}" data-current="${escapeHtml(current)}" value="${escapeHtml(state.draft ?? current)}" aria-label="Upravit hodnotu"><span class="cell-hint">Enter uložit · Tab další · Esc zrušit · prázdné = původní hodnota</span>`;
+}
+
+function startEditing(ref) {
+  state.editing = ref; state.draft = null;
+  render();
+}
+
+async function commitCell(input, step) {
+  const ref = input.dataset.cellInput;
+  if (state.editing !== ref) return;
+  const refs = [...document.querySelectorAll('[data-cell], [data-cell-input]')].map(element => element.dataset.cell || element.dataset.cellInput);
+  const next = step ? refs[refs.indexOf(ref) + step] : null;
+  const value = input.value.trim();
+  state.editing = next || null; state.draft = null;
+  if (value === input.dataset.current) {render(); return;}
+  await saveFact(ref, value && value !== input.dataset.original ? value : null);
 }
 
 function tally(results) {
@@ -223,19 +289,9 @@ function listPager(total) {
   return total > state.overviewLimit ? `<button class="secondary-button list-more" data-action="overview-more">Zobrazit další (${total - state.overviewLimit})</button>` : '';
 }
 
-function reviewTags(edit) {
-  if (!edit) return '';
-  return `${edit.value !== null ? `<span class="status-pill status-missing" title="Upraveno ${date(edit.edited_at)}">${icon('pencil')}Upraveno</span>` : ''}${edit.verified ? `<span class="status-pill status-met" title="Ověřeno ${date(edit.edited_at)}">${icon('shield-check')}Ověřeno lékařem</span>` : ''}`;
-}
-
-// Edit and confirm controls shared by facts and criteria. `ref` is "fact:F3" or "criterion:ecog".
-function editControls(ref, edit, label) {
-  const [kind, identifier] = ref.split(':');
-  return `<span class="edit-actions"><button class="icon-button" data-edit="${escapeHtml(ref)}" title="Upravit ${escapeHtml(label)}" aria-label="Upravit ${escapeHtml(label)}">${icon('pencil')}</button><button class="icon-button ${edit?.verified ? 'verified' : ''}" data-verify="${escapeHtml(kind)}" data-ref="${escapeHtml(identifier)}" data-value="${escapeHtml(edit?.value ?? '')}" data-verified="${edit?.verified ? '' : '1'}" title="${edit?.verified ? 'Zrušit ověření' : 'Potvrdit jako správné'}" aria-label="${edit?.verified ? 'Zrušit ověření' : 'Potvrdit jako správné'}">${icon(edit?.verified ? 'shield-check' : 'check')}</button></span>`;
-}
-
-function editForm(ref, current, original, edit) {
-  return `<form class="edit-form" data-edit-form="${escapeHtml(ref)}"><input name="value" value="${escapeHtml(current)}" aria-label="Nová hodnota" required><label class="check-label"><input type="checkbox" name="verified" ${edit?.verified ? 'checked' : ''}>Ověřeno</label><button class="primary-button" type="submit">Uložit</button><button class="secondary-button" type="button" data-cancel-edit>Zrušit</button>${edit?.value !== null && edit?.value !== undefined ? `<button class="secondary-button" type="button" data-reset-edit="${escapeHtml(ref)}">${icon('undo-2')}Vrátit původní</button>` : ''}<div class="cell-subtitle">Původně extrahováno: ${escapeHtml(original)}</div></form>`;
+function editedTag(fact) {
+  const edited = fact.edit?.value !== null && fact.edit?.value !== undefined;
+  return edited ? `<div class="cell-subtitle">Původně: ${escapeHtml(fact.value)}</div><span class="tag-row"><span class="status-pill status-missing" title="Upraveno ${date(fact.edit.edited_at)}">${icon('pencil')}Upraveno lékařem</span></span>` : '';
 }
 
 // The registry prefixes the eligibility text with structured age and sex limits.
@@ -256,21 +312,9 @@ function criteriaSection(trial) {
   return groups.map(([role, title, name]) => {
     const items = trial.criteria.criteria.filter(criterion => criterion.role === role);
     return items.length ? sectionTitle(name, title, items.length) + `<ol class="criteria-list">${items.map(criterion => {
-      const ref = `criterion:${criterion.id}`;
-      const current = criterion.edit?.value ?? criterion.requirement;
-      if (state.editing === ref) return `<li>${editForm(ref, current, criterion.requirement, criterion.edit)}</li>`;
-      return `<li><div class="editable-row"><span><span class="criterion-title">${escapeHtml(current)}</span><span class="criterion-reason">${escapeHtml(criterion.source.quote)}</span><span class="tag-row">${reviewTags(criterion.edit)}${criterion.source.unverified ? '<span class="status-pill status-unknown">Citace v registru neověřena</span>' : ''}</span></span>${state.mode === 'real' ? editControls(ref, criterion.edit, 'kritérium') : ''}</div></li>`;
+      return `<li><span class="criterion-title">${escapeHtml(criterion.requirement)}</span><span class="criterion-reason">${escapeHtml(criterion.source.quote)}</span>${criterion.source.unverified ? '<span class="tag-row"><span class="status-pill status-unknown">Citace v registru neověřena</span></span>' : ''}</li>`;
     }).join('')}</ol>` : '';
   }).join('') + (trial.criteria.complete && !trial.criteria.limitations?.length ? '' : `<div class="assessment-foot">${trial.criteria.complete ? '' : '<div>Extrakce kritérií není úplná, ověřte původní znění v registru.</div>'}${(trial.criteria.limitations || []).map(limit => `<div>${escapeHtml(limit)}</div>`).join('')}</div>`);
-}
-
-function reviewBanner(full) {
-  if (!full?.criteria || state.mode !== 'real') return '';
-  const review = full.review;
-  const edited = full.criteria.criteria.filter(criterion => criterion.edit?.value !== null && criterion.edit?.value !== undefined).length;
-  return review?.verified
-    ? `<div class="review-banner verified">${icon('shield-check')}<span><strong>Kritéria studie potvrzena lékařem</strong><small>${date(review.edited_at)}${edited ? ` · ${edited} ${plural(edited, 'kritérium upraveno', 'kritéria upravena', 'kritérií upraveno')}` : ''}</small></span><button class="secondary-button" data-review="0">Zrušit potvrzení</button></div>`
-    : `<div class="review-banner">${icon('shield-alert')}<span><strong>Kritéria čekají na kontrolu lékařem</strong><small>Zkontrolujte extrakci, případně kritéria upravte a studii potvrďte.</small></span><button class="primary-button" data-review="1">${icon('shield-check')}Potvrdit kritéria</button></div>`;
 }
 
 function renderTrialDetail(trial, rows) {
@@ -289,7 +333,7 @@ function renderTrialDetail(trial, rows) {
   const criteria = !full ? loadingBlock : full.error ? `<p class="empty-note">${escapeHtml(full.error)}</p>` : criteriaSection(full);
   const counts = tally(rows.map(row => row.result));
   const patients = rows.length ? tallyStrip(counts) + `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pacient</th><th>Věk / pohlaví</th><th>Diagnózy</th><th>Výsledek</th><th>Shoda kritérií</th><th>Posouzeno</th><th></th></tr></thead><tbody>${rows.map(({patient, result}) => `<tr><td><span class="cell-title">${escapeHtml(patient.name)}</span><div class="cell-subtitle id-label">${escapeHtml(patient.id)}</div></td><td>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)}</td><td>${escapeHtml(patient.diagnoses || 'Neuvedeno')}</td><td><span class="result-cell">${pill(result.status)}${alertTag(result)}</span></td><td>${scoreCell(result)}</td><td>${date(result.assessed_at)}</td><td>${openButton(patient.id, trial.id)}</td></tr>`).join('')}</tbody></table></div><div class="assessment-foot">Výsledek „Nesplňuje“ je návrh k ověření lékařem, nikoli vyloučení ze studie.</div>` : `<p class="empty-note">Studie zatím nebyla porovnána s žádným pacientem.</p>`;
-  return `<section class="match-detail">${head}${reviewBanner(full)}${sectionTitle('info','Údaje o studii')}${info}${sectionTitle('list-checks','Podmínky účasti', full?.criteria ? full.criteria.criteria.length : '')}${criteria}${sectionTitle('users-round','Posouzení pacienti', rows.length)}${patients}</section>`;
+  return `<section class="match-detail">${head}${sectionTitle('info','Údaje o studii')}${info}${sectionTitle('list-checks','Podmínky účasti', full?.criteria ? full.criteria.criteria.length : '')}${criteria}${sectionTitle('users-round','Posouzení pacienti', rows.length)}${patients}</section>`;
 }
 
 function renderOverviewTrials() {
@@ -306,42 +350,49 @@ function renderOverviewTrials() {
 }
 
 function factRow(patientId, fact) {
-  const ref = `fact:${fact.id}`;
+  const ref = fact.id;
   const current = fact.edit?.value ?? fact.value;
-  if (state.editing === ref) return `<tr><td><span class="cell-title">${escapeHtml(fact.name)}</span></td><td colspan="4">${editForm(ref, current, fact.value, fact.edit)}</td></tr>`;
-  return `<tr class="${fact.edit?.verified ? 'row-verified' : ''}"><td><span class="cell-title">${escapeHtml(fact.name)}</span><div class="cell-subtitle id-label">${escapeHtml(fact.id)}</div></td><td><span class="fact-value">${escapeHtml(current)}</span>${fact.edit?.value !== null && fact.edit?.value !== undefined ? `<div class="cell-subtitle">Původně: ${escapeHtml(fact.value)}</div>` : ''}<span class="tag-row">${reviewTags(fact.edit)}</span></td><td>${fact.date ? date(fact.date) : '<span class="muted">—</span>'}</td><td><span class="cell-subtitle quote-cell">${escapeHtml(fact.evidence.quote)}</span></td><td><span class="row-actions">${sourceButton(patientId, fact.evidence, 'Zobrazit v dokumentu')}${state.mode === 'real' ? editControls(ref, fact.edit, fact.name) : ''}</span></td></tr>`;
+  return `<tr><td><span class="cell-title">${escapeHtml(fact.name)}</span><div class="cell-subtitle id-label">${escapeHtml(fact.id)}</div></td><td class="value-cell">${editableValue(ref, current, fact.value)}${state.editing !== ref ? editedTag(fact) : ''}</td><td>${fact.date ? date(fact.date) : '<span class="muted">—</span>'}</td><td><span class="cell-subtitle quote-cell">${escapeHtml(fact.evidence.quote)}</span></td><td>${sourceButton(patientId, fact.evidence, 'Zobrazit v dokumentu')}</td></tr>`;
 }
 
-function renderPatientDetail(summary, entry) {
+// One confirmation for the whole extraction, plus an edit mode that unlocks the values.
+function reviewBanner(facts) {
+  const verified = facts.filter(fact => fact.edit?.verified);
+  const latest = verified.map(fact => fact.edit.edited_at).sort().at(-1);
+  const editButton = `<button class="secondary-button" data-facts-edit>${icon(state.editMode ? 'check' : 'pencil')}${state.editMode ? 'Hotovo' : 'Upravit'}</button>`;
+  if (verified.length === facts.length) return `<div class="review-banner verified">${icon('shield-check')}<span><strong>Údaje potvrzeny lékařem</strong><small>${date(latest)} · všech ${facts.length} údajů</small></span>${editButton}<button class="secondary-button" data-confirm-all="0">Zrušit potvrzení</button></div>`;
+  return `<div class="review-banner">${icon('shield-alert')}<span><strong>${verified.length ? `Potvrzeno ${verified.length} z ${facts.length} údajů` : 'Údaje čekají na potvrzení lékařem'}</strong><small>${state.editMode ? 'Klikněte na hodnotu a přepište ji. Enter uloží a přejde na další.' : 'Zkontrolujte extrahované údaje, případně je upravte a potvrďte.'}</small></span>${editButton}<button class="primary-button" data-confirm-all="1">${icon('shield-check')}Potvrdit vše</button></div>`;
+}
+
+function renderPatientDetail(summary) {
   const record = detail('facts', summary.id);
   const head = `<div class="trial-head"><div class="eyebrow">${escapeHtml(summary.id)} · ${summary.synthetic ? 'SYNTETICKÁ UKÁZKA' : 'PSEUDONYMIZOVANÝ ZÁZNAM'}</div><h2>${escapeHtml(summary.name)}</h2><div class="trial-links"><span class="muted">${escapeHtml(summary.age || 'Věk neuveden')} · ${sexName(summary.sex)} · ${escapeHtml(summary.diagnoses || 'Diagnóza neuvedena')}</span>${summary.deceased ? '<span class="status-pill status-not_met">Záznam o úmrtí</span>' : ''}</div></div>`;
   if (!record) return `<section class="match-detail">${head}${loadingBlock}</section>`;
   if (record.error) return `<section class="match-detail">${head}<p class="empty-note">${escapeHtml(record.error)}</p></section>`;
   if (!record.facts) return `<section class="match-detail">${head}<div class="empty-state">${icon('database')}<h2>V naší databázi zatím nejsou žádné údaje</h2><p>Dokumentace pacienta ještě nebyla zpracována (precompute.py), nebo se od posledního zpracování změnila.</p></div></section>`;
-  const verified = record.facts.filter(fact => fact.edit?.verified).length;
   const edited = record.facts.filter(fact => fact.edit?.value !== null && fact.edit?.value !== undefined).length;
-  const summaryLine = `<div class="facts-summary"><span><strong>${record.facts.length}</strong> údajů</span><span><strong>${verified}</strong> ověřeno lékařem</span><span><strong>${edited}</strong> upraveno</span><span>Snapshot dokumentace: <strong>${date(record.snapshot_at)}</strong></span><span>Zdroj: <strong>${escapeHtml(record.model)}</strong></span></div>${record.complete ? '' : '<div class="watch-banner"><strong>' + icon('triangle-alert') + 'Zpracován jen výběr dokumentace</strong><small>Chybějící údaj nemusí znamenat, že v dokumentaci není.</small></div>'}`;
+  const summaryLine = `<div class="facts-summary"><span><strong>${record.facts.length}</strong> údajů</span><span><strong>${edited}</strong> upraveno lékařem</span><span>Snapshot dokumentace: <strong>${date(record.snapshot_at)}</strong></span><span>Zdroj: <strong>${escapeHtml(record.model)}</strong></span></div>${record.complete ? '' : '<div class="watch-banner"><strong>' + icon('triangle-alert') + 'Zpracován jen výběr dokumentace</strong><small>Chybějící údaj nemusí znamenat, že v dokumentaci není.</small></div>'}`;
   const groups = factGroups.map(([category, title, name]) => {
     const facts = record.facts.filter(fact => factCategory(fact) === category);
-    return facts.length ? sectionTitle(name, title, facts.length) + `<div class="table-wrap"><table class="data-table fact-table"><thead><tr><th>Údaj</th><th>Hodnota</th><th>Datum</th><th>Citace ze zdroje</th><th></th></tr></thead><tbody>${facts.map(fact => factRow(summary.id, fact)).join('')}</tbody></table></div>` : '';
+    return facts.length ? sectionTitle(name, title, facts.length) + `<div class="table-wrap"><table class="data-table fact-table ${state.editMode ? 'editing' : ''}"><thead><tr><th>Údaj</th><th>Hodnota</th><th>Datum</th><th>Citace ze zdroje</th><th></th></tr></thead><tbody>${facts.map(fact => factRow(summary.id, fact)).join('')}</tbody></table></div>` : '';
   }).join('');
-  return `<section class="match-detail">${head}${summaryLine}${groups}<div class="assessment-foot">${(record.limitations || []).map(limit => `<div>${escapeHtml(limit)}</div>`).join('')}<div>Úpravy lékaře se ukládají vedle původní extrakce, ta se nepřepisuje.</div></div></section>`;
+  return `<section class="match-detail">${head}${reviewBanner(record.facts)}${summaryLine}${groups}<div class="assessment-foot">${(record.limitations || []).map(limit => `<div>${escapeHtml(limit)}</div>`).join('')}<div>Úpravy lékaře se ukládají vedle původní extrakce, ta se nepřepisuje.</div></div></section>`;
 }
 
 function renderOverviewPatients() {
   const entries = Object.fromEntries(state.overview.patients.map(entry => [entry.id, entry]));
-  const all = state.mode === 'demo' ? [state.demo.patient] : state.data.patients;
+  const all = cohort();
   const listed = all.filter(patient => searchHit([patient.id, patient.name, patient.diagnoses, patient.rc]))
     .sort((first, second) => Number(Boolean(entries[second.id]?.facts)) - Number(Boolean(entries[first.id]?.facts)) || inPlay(entries[second.id]?.results || []) - inPlay(entries[first.id]?.results || []) || Number(second.target) - Number(first.target));
   if (!listed.length) return `<p class="empty-note">Žádný pacient neodpovídá hledání.</p>`;
   if (!listed.some(patient => patient.id === state.overviewPatient)) state.overviewPatient = listed.find(patient => patient.id === state.patient.id)?.id || listed[0].id;
   const selected = listed.find(patient => patient.id === state.overviewPatient);
-  return `<div class="matches-layout"><aside class="study-list" aria-label="Pacienti">${listed.slice(0, state.overviewLimit).map(patient => {const entry = entries[patient.id];return `<button class="study-choice ${patient.id === state.overviewPatient ? 'active' : ''}" data-overview-patient="${escapeHtml(patient.id)}"><div class="study-protocol id-label">${escapeHtml(patient.id)}</div><div class="study-name">${escapeHtml(patient.name)}</div><div class="study-score"><span>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)} · ${escapeHtml(patient.diagnoses || '—')}<br>${entry?.facts ? `${entry.facts} údajů v databázi${entry.verified ? ` · ${entry.verified} ověřeno` : ''}` : '<span class="muted">Nezpracováno</span>'}</span>${entry?.facts ? `<strong>${entry.facts}</strong>` : ''}</div></button>`;}).join('')}${listPager(listed.length)}</aside>${renderPatientDetail(selected, entries[selected.id])}</div>`;
+  return `<div class="matches-layout"><aside class="study-list" aria-label="Pacienti">${listed.slice(0, state.overviewLimit).map(patient => {const entry = entries[patient.id];return `<button class="study-choice ${patient.id === state.overviewPatient ? 'active' : ''}" data-overview-patient="${escapeHtml(patient.id)}"><div class="study-protocol id-label">${escapeHtml(patient.id)}</div><div class="study-name">${escapeHtml(patient.name)}</div><div class="study-score"><span>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)} · ${escapeHtml(patient.diagnoses || '—')}<br>${entry?.facts ? `${entry.facts} údajů v databázi${entry.verified ? ` · ${entry.verified} ověřeno` : ''}` : '<span class="muted">Nezpracováno</span>'}</span>${entry?.facts ? `<strong>${entry.facts}</strong>` : ''}</div></button>`;}).join('')}${listPager(listed.length)}</aside>${renderPatientDetail(selected)}</div>`;
 }
 
 function renderOverview() {
   const {patients, trials} = state.overview;
-  const all = state.mode === 'demo' ? [state.demo.patient] : state.data.patients;
+  const all = cohort();
   const processed = patients.filter(entry => entry.facts).length;
   const header = heading('Přehled databáze', `${trials.length} ${plural(trials.length, 'studie', 'studie', 'studií')} (${trials.filter(trial => trial.criteria).length} s kritérii) · ${all.length} ${plural(all.length, 'pacient', 'pacienti', 'pacientů')} (${processed} ${plural(processed, 'zpracovaný', 'zpracovaní', 'zpracovaných')})`);
   const tabs = [['trials','Studie',trials.length],['patients','Pacienti',all.length]];
@@ -351,13 +402,13 @@ function renderOverview() {
 }
 
 async function openMatch(patientId, trialId) {
-  if (state.mode === 'real' && patientId !== state.patient.id) await selectPatient(patientId);
+  if (patientId !== state.patient.id) await selectPatient(patientId);
   state.view = 'matches'; state.trialId = trialId; state.expanded.clear(); state.filter = 'all';
   render(); scrollTo(0, 0);
 }
 
 function renderDebug() {
-  const patients=state.mode==='demo'?[state.demo.patient]:state.data.patients;
+  const patients=cohort();
   const trials=allTrials();
   let records=state.debugTab==='patients'?patients:trials;
   records=records.filter(item=>JSON.stringify(item).toLocaleLowerCase('cs').includes(state.query.toLocaleLowerCase('cs')));
@@ -379,13 +430,18 @@ function render() {
   document.querySelectorAll('[data-mode]').forEach(button=>button.classList.toggle('selected',button.dataset.mode===state.mode));
   const banner=document.querySelector('#demo-banner');
   banner.hidden=state.mode!=='demo'&&!state.data?.seeded;
-  banner.querySelector('span').textContent=state.mode==='demo'?'Syntetický pacient a studie. Nejde o skutečné klinické výsledky.':'Ukázková databáze: studie jsou smyšlené, údaje pacientů jsou vybrané pravidly (bez LLM) ze skutečné dokumentace.';
+  banner.querySelector('span').textContent=state.mode==='demo'?'Syntetičtí pacienti a studie. Nejde o skutečné klinické výsledky.':'Ukázková databáze: studie jsou smyšlené, údaje pacientů jsou vybrané pravidly (bez LLM) ze skutečné dokumentace.';
+  if(popup)document.title=`TrialScreen | ${state.view==='overview'?'Přehled databáze':'Shoda se studiemi'}`;
+  const cellInput=document.querySelector('[data-cell-input]');
+  // Until the user types, keep the whole value selected so typing replaces it, as in a spreadsheet.
+  if(cellInput&&document.activeElement!==cellInput){cellInput.focus();if(state.draft===null)cellInput.select();else cellInput.setSelectionRange(cellInput.value.length,cellInput.value.length);}
   document.querySelectorAll('.app-nav [data-view]').forEach(button=>button.classList.toggle('selected',button.dataset.view===state.view));
   document.querySelector('#footer-mode').textContent=state.mode==='demo'?'Syntetické ukázkové záznamy':'Pseudonymizovaná data · Posunutá data záznamů';
   refreshIcons();
 }
 
 async function selectPatient(identifier) {
+  if(state.mode==='demo'){state.patient=patientSummary(identifier);state.trialId=null;state.expanded.clear();state.filter='all';render();return;}
   const sequence=++patientRequest;
   const patient=await api(`/api/patients/${encodeURIComponent(identifier)}`);
   if(sequence!==patientRequest||state.mode!=='real')return;
@@ -394,14 +450,22 @@ async function selectPatient(identifier) {
   render();
 }
 
+// Older servers return a single demo patient; normalize so the page works against either.
+async function loadDemo() {
+  const demo = await api('/api/demo');
+  demo.patients ||= [demo.patient];
+  demo.patients.forEach(patient => {patient.facts ||= [];});
+  return demo;
+}
+
 async function setMode(mode) {
   ++patientRequest;state.mode=mode;state.trialId=null;state.expanded.clear();state.filter='all';state.query='';state.page=0;
-  if(mode==='demo') {state.demo ||= await api('/api/demo');state.patient=state.demo.patient;render();}
+  if(mode==='demo') {state.demo ||= await loadDemo();state.patient=state.demo.patient;render();}
   else await selectPatient(state.realPatientId || state.data.patients.find(patient=>patient.target&&!patient.deceased)?.id || state.data.patients[0].id);
 }
 
 async function showSource(identifier,quote='',patientId=state.patient.id) {
-  const source=state.mode==='demo'?state.demo.patient.sources.find(item=>item.id===identifier):await api(`/api/patients/${encodeURIComponent(patientId)}/sources/${encodeURIComponent(identifier)}${state.trialId?`?trial_id=${encodeURIComponent(state.trialId)}`:''}`);
+  const source=state.mode==='demo'?patientSummary(patientId)?.sources.find(item=>item.id===identifier):await api(`/api/patients/${encodeURIComponent(patientId)}/sources/${encodeURIComponent(identifier)}${state.trialId?`?trial_id=${encodeURIComponent(state.trialId)}`:''}`);
   if(!source)throw new Error('Zdroj nebyl nalezen.');
   document.querySelector('#source-title').textContent=source.title;
   document.querySelector('#source-meta').innerHTML=`${escapeHtml(source.id)} · ${date(source.date)}${source.url?` <a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Otevřít původní stránku</a>`:''}`;
@@ -435,18 +499,19 @@ async function pollJob(identifier, failures=0) {
 document.addEventListener('click',async event=>{
   const button=event.target.closest('button');if(!button)return;
   try{
+    // Save an open cell before acting, so the click is not lost to the re-render that saving causes.
+    const cellInput=document.querySelector('[data-cell-input]');
+    // The page updates synchronously; the request finishes in the background.
+    if(cellInput&&state.editing)commitCell(cellInput,0).catch(error=>toast(error.message));
     if(button.dataset.view){if(button.dataset.view==='overview')await loadOverview();state.view=button.dataset.view;render();scrollTo(0,0);}
-    if(button.dataset.overviewTab){state.overviewTab=button.dataset.overviewTab;state.overviewQuery='';state.overviewFilter='all';state.overviewLimit=40;render();}
+    if(button.dataset.overviewTab){state.overviewTab=button.dataset.overviewTab;state.editMode=false;state.editing=null;state.overviewQuery='';state.overviewFilter='all';state.overviewLimit=40;render();}
     if(button.dataset.overviewFilter){state.overviewFilter=button.dataset.overviewFilter;state.overviewLimit=40;render();}
     if(button.dataset.action==='overview-more'){state.overviewLimit+=40;render();}
     if(button.dataset.overviewTrial){state.overviewTrial=button.dataset.overviewTrial;render();}
-    if(button.dataset.overviewPatient){state.overviewPatient=button.dataset.overviewPatient;render();}
+    if(button.dataset.overviewPatient){state.overviewPatient=button.dataset.overviewPatient;state.editMode=false;state.editing=null;render();}
     if(button.dataset.openPatient)await openMatch(button.dataset.openPatient,button.dataset.openTrial);
-    if(button.dataset.edit){state.editing=button.dataset.edit;render();document.querySelector('.edit-form input[name=value]')?.focus();}
-    if(button.hasAttribute('data-cancel-edit')){state.editing=null;render();}
-    if(button.dataset.verify)await saveEdit(button.dataset.verify,button.dataset.ref,{value:button.dataset.value||null,verified:button.dataset.verified==='1'});
-    if(button.dataset.resetEdit){const [kind,ref]=button.dataset.resetEdit.split(':');await saveEdit(kind,ref,{value:null,verified:button.form.verified.checked});}
-    if(button.dataset.review)await saveEdit('study','study',{verified:button.dataset.review==='1'});
+    if(button.hasAttribute('data-facts-edit')){state.editMode=!state.editMode;state.editing=null;render();}
+    if(button.dataset.confirmAll)await confirmAll(button.dataset.confirmAll==='1');
     if(button.dataset.mode){if(state.mode==='real')state.realPatientId=state.patient.id;await setMode(button.dataset.mode);}
     if(button.dataset.source)await showSource(button.dataset.source,button.dataset.quote||'',button.dataset.sourcePatient||state.patient.id);
     if(button.hasAttribute('data-close-dialog'))button.closest('dialog').close();
@@ -454,7 +519,7 @@ document.addEventListener('click',async event=>{
     if(button.dataset.criterion){const identifier=button.dataset.criterion;state.expanded.has(identifier)?state.expanded.delete(identifier):state.expanded.add(identifier);render();}
     if(button.dataset.debugTab){state.debugTab=button.dataset.debugTab;state.query='';state.page=0;render();}
     if(button.dataset.page!==undefined){state.page=Number(button.dataset.page);render();}
-    if(button.dataset.patient){state.view='patient';if(state.mode==='real')await selectPatient(button.dataset.patient);else render();}
+    if(button.dataset.patient){state.view='patient';await selectPatient(button.dataset.patient);}
     if(button.dataset.debugTrial){const trial=state.mode==='demo'?trialById(button.dataset.debugTrial):await api(`/api/trials/${encodeURIComponent(button.dataset.debugTrial)}`);document.querySelector('#source-title').textContent=trial.protocol;document.querySelector('#source-meta').textContent='Zdrojová metadata studie';document.querySelector('#source-text').textContent=JSON.stringify(trial,null,2);document.querySelector('#source-dialog').showModal();}
     if(button.dataset.action==='open-matches')openMatchesWindow();
     if(button.dataset.action==='registry')await startJob({kind:'registry'});
@@ -462,11 +527,23 @@ document.addEventListener('click',async event=>{
   }catch(error){toast(error.message);}
 });
 
-document.addEventListener('submit',async event=>{
-  const form=event.target.closest('[data-edit-form]');if(!form)return;
-  event.preventDefault();
-  const [kind,ref]=form.dataset.editForm.split(':');
-  try{await saveEdit(kind,ref,{value:form.value.value,verified:form.verified.checked});}catch(error){toast(error.message);}
+document.addEventListener('click',event=>{
+  const cell=event.target.closest('[data-cell]');
+  if(cell&&state.editMode)startEditing(cell.dataset.cell);
+});
+
+document.addEventListener('keydown',event=>{
+  const input=event.target.closest('[data-cell-input]');if(!input)return;
+  if(event.key==='Escape'){event.preventDefault();state.editing=null;state.draft=null;render();}
+  else if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();commitCell(input,event.shiftKey?-1:1).catch(error=>toast(error.message));}
+});
+
+// Clicking elsewhere saves, like a spreadsheet; clicking a button is saved by the click handler instead.
+// A re-render also blurs the input it replaces, so check after the event settles that this input is
+// still on the page and still the one being edited.
+document.addEventListener('focusout',event=>{
+  const input=event.target.closest('[data-cell-input]');if(!input||event.relatedTarget?.closest('button'))return;
+  setTimeout(()=>{if(input.isConnected&&document.activeElement!==input&&state.editing===input.dataset.cellInput)commitCell(input,0).catch(error=>toast(error.message));});
 });
 
 document.addEventListener('change',async event=>{
@@ -476,6 +553,7 @@ document.addEventListener('change',async event=>{
 });
 
 document.addEventListener('input',event=>{
+  if(event.target.dataset.cellInput)state.draft=event.target.value;
   if(event.target.id==='overview-search'){const cursor=event.target.selectionStart;state.overviewQuery=event.target.value;state.overviewLimit=40;render();const field=document.querySelector('#overview-search');field.focus();field.setSelectionRange(cursor,cursor);}
   if(event.target.id==='debug-search'){const cursor=event.target.selectionStart;state.query=event.target.value;state.page=0;render();const field=document.querySelector('#debug-search');field.focus();field.setSelectionRange(cursor,cursor);}
 });
@@ -486,7 +564,7 @@ async function initialize(){
     if(popup){
       document.title='TrialScreen | Shoda se studiemi';
       state.view='matches';
-      if(params.get('mode')==='demo'){state.mode='demo';state.demo=await api('/api/demo');state.patient=state.demo.patient;}
+      if(params.get('mode')==='demo'){state.mode='demo';state.demo=await loadDemo();state.patient=state.demo.patients.find(patient=>patient.id===params.get('patient'))||state.demo.patient;}
       else await selectPatient(params.get('patient'));
       state.trialId=params.get('trial');
       render();

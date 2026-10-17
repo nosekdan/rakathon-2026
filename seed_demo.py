@@ -9,6 +9,7 @@ them for model output:
     TRIALSCREEN_DB=.cache/demo-seed.sqlite3 uv run uvicorn main:app --host 127.0.0.1 --port 8765
 """
 
+import argparse
 import os
 
 os.environ.setdefault("TRIALSCREEN_DB", ".cache/demo-seed.sqlite3")
@@ -143,18 +144,20 @@ def extract(record: dict) -> list[dict]:
     return [{"id": f"F{index}", **fact} for index, fact in enumerate(facts, 1)]
 
 
-def chosen_patients() -> list[dict]:
-    candidates = [
-        patient
-        for patient in patients()
-        if patient["target"]
-        and not patient["deceased"]
-        and 5 <= patient["notes"] <= 40
-        and patient["labs"] > 20
-    ]
-    prostate = [patient for patient in candidates if patient["diagnoses"] == "C61"][:10]
-    kidney = [patient for patient in candidates if patient["diagnoses"] == "C64"][:4]
-    return prostate + kidney
+def chosen_patients(count: int) -> list[dict]:
+    """The best-documented living patients with the target diagnoses, about four prostate to one kidney."""
+    candidates = sorted(
+        (
+            patient
+            for patient in patients()
+            if patient["target"] and not patient["deceased"] and patient["notes"] >= 3 and patient["labs"] > 0
+        ),
+        key=lambda patient: (min(patient["notes"], 40), min(patient["labs"], 200)),
+        reverse=True,
+    )
+    kidney = [patient for patient in candidates if "C64" in patient["diagnoses"]][: max(1, count // 5)]
+    prostate = [patient for patient in candidates if "C61" in patient["diagnoses"] and patient not in kidney]
+    return prostate[: count - len(kidney)] + kidney
 
 
 # Studies ------------------------------------------------------------------------------------------------
@@ -482,6 +485,9 @@ def registry_for(study: dict, now: str) -> dict:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--count", type=int, default=80, help="number of patients (default 80)")
+    count = parser.parse_args().count
     if storage.PATH.exists():
         storage.PATH.unlink()
     now = datetime.now(UTC).isoformat()
@@ -531,7 +537,8 @@ def main() -> None:
         storage.put("criteria", extraction["key"], study["id"], extraction)
         studies.append((study, extraction))
 
-    for patient in chosen_patients():
+    seeded = total = 0
+    for patient in chosen_patients(count):
         record = patient_record(patient["id"])
         task = patient_input(record)
         facts = extract(record)
@@ -594,8 +601,11 @@ def main() -> None:
                     "future_watch": future_watch(parsed, verified),
                 },
             )
-        print(f"{patient['id']}: {len(facts)} údajů")
-    print(f"Hotovo: {storage.PATH}")
+        seeded += 1
+        total += len(facts)
+    print(
+        f"Hotovo: {seeded} pacientů, {total} údajů, {len(storage.rows('matches'))} porovnání → {storage.PATH}"
+    )
 
 
 if __name__ == "__main__":
