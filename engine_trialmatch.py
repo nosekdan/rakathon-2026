@@ -30,7 +30,7 @@ from trialmatch import lexicon
 from trialmatch.match import evaluate, fill_with_llm
 from trialmatch.profile import profile_from_record
 from trialmatch.schema import MET, NOT_ASSESSABLE, NOT_MET, REVIEW, UNKNOWN, Criterion
-from trialmatch.trials.structure import structure_registry_text
+from trialmatch.trials.structure import structure_registry_text, structure_text
 
 ENGINE = "trialmatch"
 FACTS_LIMITATION = "Údaje vybrány pravidly (slovník a vzory), nikoli jazykovým modelem; každý má citaci ze zdroje."
@@ -330,3 +330,36 @@ def compare(trial: dict, facts: dict, criteria: dict, deployment: str, model_ver
         "decisions": verified,
         "future_watch": future_watch(extraction, verified),
     }
+
+
+# Clinician edits of a study's criteria ----------------------------------------------------------------------------
+
+
+def clinician_criteria(trial_id: str, role: str, text: str, number: int, diagnosis_icd: list[str]) -> list[dict]:
+    """A criterion typed by a clinician, structured by the same rules as the registry text.
+
+    One text can yield several criteria (e.g. two lab limits); what the rules cannot read is left to the clinician.
+    """
+    found = structure_text(trial_id, role, text, number, diagnosis_icd) or []
+    items = []
+    for index, c in enumerate(found):
+        c.source = "clinician"
+        items.append({
+            "id": f"L{number}" + (chr(ord("a") + index) if len(found) > 1 else ""),
+            "requirement": _requirement(c) if c.concept else f"Posoudí lékař: {text[:220]}",
+            "role": role,
+            "source": {"source_id": "clinician", "quote": text},
+            "trigger": _trigger(c),
+            "tm": c.to_dict(),
+        })
+    return items
+
+
+def evaluate_criteria(record: dict, facts: dict, items: list[dict], diagnosis_icd: list[str]) -> list[dict]:
+    """Decisions for the given criteria only (same rules as compare, without the language model)."""
+    profile = _profile(record)
+    fact_ids = {fact["tm"]["key"]: fact["id"] for fact in facts["facts"] if fact.get("tm")}
+    decisions = [_decision(item["id"], evaluate(Criterion.from_dict(item["tm"]), profile, diagnosis_icd), fact_ids)
+                 for item in items]
+    extraction = TrialExtraction.model_validate({"criteria": items, "logic": {"op": "all"}, "complete": True})
+    return verify_decisions(extraction.criteria, decisions, {fact["id"]: fact for fact in facts["facts"]})

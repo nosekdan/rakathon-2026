@@ -269,7 +269,10 @@ def test_stages_cache_by_input_and_compare_from_facts(monkeypatch):
     data = main.overview()
     [entry] = data["patients"]
     assert entry["results"][0]["status"] == "missing" and entry["results"][0]["badge"] is False
-    assert data["trials"] == [{**TRIAL, "registry": main.public_registry(REGISTRY), "criteria": 2}]
+    review = {"verified": False, "verified_at": None, "edited": False, "applied": False, "stale": False}
+    assert data["trials"] == [
+        {**TRIAL, "registry": main.public_registry(REGISTRY), "criteria": 2, "criteria_review": review}
+    ]
     main.edit_fact("synthetic", "F1", main.Edit(value=" 2 ", verified=True))
     [fact] = main.get_facts("synthetic")["facts"]
     assert fact["value"] == "1", "the extraction itself is never overwritten"

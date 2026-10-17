@@ -38,6 +38,13 @@ def main() -> int:
               f"({len(trial_ids) - len(resolved)} studies without a unique registry match skipped)", flush=True)
         argv = [x for p in group for x in ("--patient", p["id"])] + [x for t in resolved for x in ("--trial", t)]
         status |= precompute.main([*argv, "--compare", "--max-new", "1000000", "--execute"])
+        # Criteria a clinician added to a study are evaluated for the newly compared patients too.
+        from main import criteria_edit, evaluate_added
+
+        for trial_id in resolved:
+            edit = criteria_edit(trial_id)
+            if edit and edit["added"]:
+                evaluate_added(trial_id, edit)
     return status
 
 

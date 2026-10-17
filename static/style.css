@@ -134,3 +134,13 @@ body.nis-mode .trial-widget{font-family:"Inter",system-ui,sans-serif}
 .group-future>summary{color:var(--blue);background:var(--blue-soft)}.group-other>summary{color:var(--muted)}
 @media (max-width:900px){.nis-layout,.nis-grid{grid-template-columns:1fr}.nis-list{max-height:260px}}
 .group-more{margin:10px 14px 14px;max-width:none}
+/* --- Clinician review of a study's criteria --- */
+.review-icon{display:inline-flex;vertical-align:-3px;margin-right:5px}.review-icon svg{width:14px;height:14px}
+.review-icon.verified{color:var(--green)}.review-icon.pending{color:var(--amber)}
+.link-button{display:inline-flex;align-items:center;gap:4px;background:none;border:0;padding:2px 4px;min-height:0;font-size:10px;font-weight:650;color:var(--green);cursor:pointer}
+.link-button svg{width:13px;height:13px}.link-button.danger{color:var(--red)}
+.criteria-list .tag-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}.criteria-list .tag-row .status-pill{margin-top:0}
+.criteria-list li.removed .criterion-title{text-decoration:line-through;color:var(--muted)}
+.criteria-add{margin:14px 0;padding:12px 14px;border:1px dashed var(--line);border-radius:6px;background:#fff}
+.criteria-add-row{display:flex;gap:8px;margin:8px 0 6px;flex-wrap:wrap}.criteria-add-row input{flex:1;min-width:220px}
+.criteria-add small{font-size:10px}

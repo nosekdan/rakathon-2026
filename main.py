@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import secrets
 import threading
 from collections import Counter
@@ -28,7 +30,7 @@ from pipeline import (
     trial_input,
 )
 from repository import DATASET, patient_record, patients, patients_by_id, trials, trials_by_id
-from screening import STATUSES, Logic, TrialExtraction, badge, evaluate_logic
+from screening import STATUSES, Logic, TrialExtraction, badge, evaluate_logic, future_watch
 
 
 @asynccontextmanager
@@ -98,18 +100,24 @@ def facts_key(patient_id: str) -> str:
     return _facts_key(patient_id, path.stat().st_mtime_ns if path and path.exists() else 0)
 
 
-def cached_results(record: dict, facts: dict | None = None, registries: dict | None = None) -> list[dict]:
+def cached_results(
+    record: dict, facts: dict | None = None, registries: dict | None = None, trial_edits: dict | None = None
+) -> list[dict]:
     """Saved comparisons whose facts and criteria still match the current inputs, assembled for the UI.
 
-    record needs only "id" and "deceased"; facts and registries may be passed in to avoid repeated reads.
+    record needs only "id" and "deceased"; facts, registries and trial_edits (a shared cache of criteria_edit)
+    may be passed in to avoid repeated reads.
     """
+    trial_edits = {} if trial_edits is None else trial_edits
     if facts is None:
         key = patient_input(record)["key"] if "sources" in record else facts_key(record["id"])
         facts = storage.get("facts", key)
     if not facts:
         return []
     results = []
-    overrides = decision_edits(record["id"])
+    own_edits = storage.by_owner("edits", record["id"])
+    overrides = decision_edits(own_edits)
+    added = {edit["trial_id"]: edit for edit in own_edits if edit.get("scope") == "added"}
     for match in storage.by_owner("matches", record["id"]):
         registry = registries.get(match["trial_id"]) if registries is not None else \
             storage.get("registry", match["trial_id"])
@@ -119,6 +127,13 @@ def cached_results(record: dict, facts: dict | None = None, registries: dict | N
         if not cached or not match_is_current(match, facts["key"], cached[0]["key"]):
             continue
         criteria, extraction = cached
+        if match["trial_id"] not in trial_edits:
+            trial_edits[match["trial_id"]] = criteria_edit(match["trial_id"])
+        edit = trial_edits[match["trial_id"]]
+        review = criteria_review(edit, criteria["key"])
+        if review["applied"]:
+            criteria = effective_criteria(criteria, edit)
+            match = apply_criteria_edits(match, criteria, edit, added.get(match["trial_id"]))
         match = apply_decision_edits(match, criteria, overrides)
         # Recruitment can change without invalidating the comparison, so the alert is decided at read time.
         alert = badge(
@@ -138,6 +153,7 @@ def cached_results(record: dict, facts: dict | None = None, registries: dict | N
                 "model": match.get("label", MODEL),
                 "snapshot_at": facts["snapshot_at"],
                 "summary": {**match["summary"], "badge": alert},
+                "criteria_review": review,
                 "criteria": {key: criteria[key] for key in ("criteria", "logic", "complete", "limitations")},
                 "registry": public_registry(registry),
                 "patient_facts": {"source_ids": facts["source_ids"], "complete": facts["complete"]},
@@ -154,13 +170,39 @@ def cached_results(record: dict, facts: dict | None = None, registries: dict | N
     return results
 
 
-def decision_edits(patient_id: str) -> dict[tuple[str, str], dict]:
-    """Criteria decided by a clinician for this patient, by (trial ID, criterion ID)."""
+def decision_edits(own_edits: list[dict]) -> dict[tuple[str, str], dict]:
+    """Criteria decided by a clinician for this patient (from the patient's edits), by (trial ID, criterion ID)."""
     return {
         (edit["trial_id"], edit["criterion_id"]): edit
-        for edit in storage.by_owner("edits", patient_id)
+        for edit in own_edits
         if edit.get("scope", "").startswith("decision:") and edit.get("status")
     }
+
+
+def recompute_summary(match: dict, criteria: dict, decisions: list[dict], decided: set[str] = frozenset()) -> dict:
+    """The match with new decisions: counts, logic status, match % and the future watch computed again.
+
+    decided = criterion IDs a clinician decided; administrative ones then count as assessable.
+    """
+    counts = Counter(decision["status"] for decision in decisions)
+    total = len(decisions)
+    summary = {**match["summary"], "total": total, "counts": {status: counts[status] for status in STATUSES}}
+    summary["status"] = evaluate_logic(
+        Logic.model_validate(criteria["logic"]), {d["criterion_id"]: d["status"] for d in decisions}
+    )
+    summary["coverage_percent"] = round(100 * (counts["met"] + counts["not_met"]) / total) if total else 0
+    denominator = total
+    if "assessable" in summary:
+        # Administrative criteria (consent, ...) count once the clinician has decided them.
+        administrative = {
+            item["id"] for item in criteria["criteria"] if item.get("tm", {}).get("evaluability") == "not_assessable"
+        }
+        summary["assessable"] = total - len(administrative - decided)
+        summary["administrative"] = len(administrative - decided)
+        denominator = summary["assessable"]
+    summary["match_percent"] = round(100 * counts["met"] / denominator) if denominator else 0
+    watch = future_watch(TrialExtraction.model_validate(criteria), decisions)
+    return {**match, "decisions": decisions, "summary": summary, "future_watch": watch}
 
 
 def apply_decision_edits(match: dict, criteria: dict, overrides: dict) -> dict:
@@ -185,25 +227,111 @@ def apply_decision_edits(match: dict, criteria: dict, overrides: dict) -> dict:
                 "original": {key: decision[key] for key in ("status", "reason", "action")},
             }
         decisions.append(decision)
-    counts = Counter(decision["status"] for decision in decisions)
-    summary = {**match["summary"], "counts": {status: counts[status] for status in STATUSES}}
-    summary["status"] = evaluate_logic(
-        Logic.model_validate(criteria["logic"]), {d["criterion_id"]: d["status"] for d in decisions}
-    )
-    total = summary["total"]
-    summary["coverage_percent"] = round(100 * (counts["met"] + counts["not_met"]) / total) if total else 0
-    denominator = total
-    if "assessable" in summary:
-        # Administrative criteria (consent, ...) count once the clinician has decided them.
-        administrative = {
-            item["id"] for item in criteria["criteria"] if item.get("tm", {}).get("evaluability") == "not_assessable"
-        }
-        decided = len(administrative & mine.keys())
-        summary["assessable"] = total - len(administrative) + decided
-        summary["administrative"] = len(administrative) - decided
-        denominator = summary["assessable"]
-    summary["match_percent"] = round(100 * counts["met"] / denominator) if denominator else 0
-    return {**match, "decisions": decisions, "summary": summary}
+    return recompute_summary(match, criteria, decisions, set(mine))
+
+
+# Clinician review of a study's criteria: confirm them, remove some, add new ones. One document per study in edits;
+# the extracted criteria are never overwritten and the edit applies at read time to every patient.
+
+
+def criteria_edit(trial_id: str) -> dict | None:
+    return storage.get("edits", f"criteria:{trial_id}")
+
+
+def edit_version(removed: list[str], added: list[dict]) -> str:
+    content = json.dumps([sorted(removed), [(item["role"], item["text"]) for item in added]], ensure_ascii=False)
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def criteria_review(edit: dict | None, criteria_key: str) -> dict:
+    """Whether a clinician confirmed this study's criteria. An edit made for an older extraction is not applied."""
+    if not edit:
+        return {"verified": False, "verified_at": None, "edited": False, "applied": False, "stale": False}
+    current = edit["base_key"] == criteria_key
+    return {
+        "verified": current and edit.get("verified", False),
+        "verified_at": edit.get("verified_at") if current else None,
+        "edited": bool(edit["removed"] or edit["added"]),
+        "applied": current,
+        "stale": not current,
+    }
+
+
+def added_items(edit: dict) -> list[dict]:
+    return [criterion for item in edit["added"] for criterion in item["criteria"]]
+
+
+def effective_criteria(criteria: dict, edit: dict) -> dict:
+    """The extracted criteria without the removed ones and with the clinician's additions."""
+    removed = set(edit["removed"])
+
+    def prune(node: dict) -> dict | None:
+        if node["op"] == "ref":
+            return None if node["criterion_id"] in removed else node
+        children = [child for child in map(prune, node.get("children", [])) if child]
+        return {**node, "children": children} if children else None
+
+    added = added_items(edit)
+    kept = prune(criteria["logic"])
+    refs = [{"op": "ref", "criterion_id": item["id"]} for item in added]
+    logic = {"op": "all", "children": ([kept] if kept else []) + refs}
+    if kept and kept["op"] == "all":
+        logic = {**kept, "children": kept["children"] + refs}
+    return {
+        **criteria,
+        "criteria": [item for item in criteria["criteria"] if item["id"] not in removed] + added,
+        "logic": logic,
+    }
+
+
+def apply_criteria_edits(match: dict, criteria: dict, edit: dict, added: dict | None) -> dict:
+    """Decisions for the edited criteria: removed ones dropped, added ones from the recomputation (or pending)."""
+    computed = {d["criterion_id"]: d for d in added["decisions"]} if added and added["version"] == edit["version"] \
+        else {}
+    removed = set(edit["removed"])
+    decisions = [decision for decision in match["decisions"] if decision["criterion_id"] not in removed]
+    for item in added_items(edit):
+        decisions.append(computed.get(item["id"]) or {
+            "criterion_id": item["id"], "status": "missing", "reason": "Kritérium přidal lékař, přepočítává se.",
+            "action": "Obnovit stránku za chvíli.", "fact_ids": [], "evidence": [],
+        })
+    return recompute_summary(match, criteria, decisions)
+
+
+def diagnosis_icd(criteria: dict) -> list[str]:
+    for item in criteria["criteria"]:
+        if item.get("tm", {}).get("concept") == "diagnosis":
+            return item["tm"].get("value") or []
+    return []
+
+
+def evaluate_added(trial_id: str, edit: dict, job: dict | None = None) -> None:
+    """Evaluate the clinician's added criteria for every patient compared with the study (rules only, local)."""
+    from engine_trialmatch import evaluate_criteria
+
+    registry = storage.get("registry", trial_id)
+    cached = criteria_by_key(trial_input(registry)["key"]) if registry else None
+    if not cached or cached[0]["key"] != edit["base_key"]:
+        return
+    items, icd = added_items(edit), diagnosis_icd(cached[0])
+    owners = sorted({m["patient_id"] for k, m in storage.rows("matches").items()
+                     if "@" not in k and m["trial_id"] == trial_id})
+    if job is not None:
+        job.update(total=len(owners), message="Přepočet přidaných kritérií")
+    for patient_id in owners:
+        try:
+            record = patient_record(patient_id)
+            facts = storage.get("facts", facts_key(patient_id))
+            if facts:
+                decisions = evaluate_criteria(record, facts, items, icd) if items else []
+                storage.put("edits", f"added:{trial_id}:{patient_id}", patient_id, {
+                    "scope": "added", "trial_id": trial_id, "version": edit["version"], "decisions": decisions,
+                })
+        except Exception as error:  # noqa: BLE001 - one patient must not stop the recomputation
+            if job is not None:
+                job["errors"].append(f"{patient_id}: {type(error).__name__}")
+        if job is not None:
+            job["done"] += 1
 
 
 @app.get("/api/bootstrap")
@@ -240,6 +368,7 @@ def result_summary(result: dict) -> dict:
         "trial_id": result["trial_id"],
         "assessed_at": result["assessed_at"],
         **{key: result["summary"][key] for key in ("status", "badge", "match_percent", "counts", "total")},
+        "verified": result["criteria_review"]["verified"],
         # Only blocker is progression or a washout: a candidate for later.
         "future": bool(result.get("future_watch")),
         # Rule-engine results also say how many criteria were assessable from documentation.
@@ -269,11 +398,12 @@ def build_overview():
     owners = {match["patient_id"] for key, match in storage.rows("matches").items() if "@" not in key}
     owners |= {facts["patient_id"] for facts in storage.rows("facts").values() if not facts.get("as_of")}
     registries = storage.rows("registry")
+    trial_edits = {trial["id"]: criteria_edit(trial["id"]) for trial in trials()}
     entries = []
     for patient_id in sorted(owners & patients_by_id().keys()):
         facts = storage.get("facts", facts_key(patient_id))
         summary = patients_by_id()[patient_id]
-        results = cached_results({"id": patient_id, "deceased": summary["deceased"]}, facts, registries)
+        results = cached_results({"id": patient_id, "deceased": summary["deceased"]}, facts, registries, trial_edits)
         if not facts and not results:
             continue
         reviewed = edits(patient_id, facts["key"]).values() if facts else []
@@ -290,11 +420,16 @@ def build_overview():
     for trial in trials():
         registry = registries.get(trial["id"])
         criteria = current_criteria(registry)
+        edit = trial_edits[trial["id"]]
+        review = criteria_review(edit, criteria["key"]) if criteria else None
+        if review and review["applied"]:
+            criteria = effective_criteria(criteria, edit)
         studies.append(
             {
                 **trial,
                 "registry": public_registry(registry),
                 "criteria": len(criteria["criteria"]) if criteria else None,
+                "criteria_review": review,
             }
         )
     return {"patients": entries, "trials": studies}
@@ -423,7 +558,105 @@ def get_trial_detail(trial_id: str):
     if trial is None:
         raise HTTPException(404, "Trial not found")
     registry = storage.get("registry", trial_id)
-    return {**trial, "registry": registry, "criteria": current_criteria(registry)}
+    criteria = current_criteria(registry)
+    edit = criteria_edit(trial_id)
+    review = criteria_review(edit, criteria["key"]) if criteria else None
+    removed = []
+    if review and review["applied"]:
+        removed = [item for item in criteria["criteria"] if item["id"] in set(edit["removed"])]
+        criteria = effective_criteria(criteria, edit)
+    added = {item["id"] for item in added_items(edit)} if review and review["applied"] else set()
+    if criteria:
+        criteria = {**criteria, "criteria": [{**item, "added": item["id"] in added} for item in criteria["criteria"]]}
+    return {**trial, "registry": registry, "criteria": criteria, "removed": removed, "criteria_review": review}
+
+
+class CriteriaChange(BaseModel):
+    role: Literal["inclusion", "exclusion"]
+    text: str = Field(min_length=2, max_length=500)
+
+
+class CriteriaEdit(BaseModel):
+    removed: list[str] = Field(default_factory=list, max_length=500)
+    added: list[CriteriaChange] = Field(default_factory=list, max_length=50)
+
+
+class CriteriaVerification(BaseModel):
+    verified: bool = True
+
+
+def extracted_criteria(trial_id: str) -> dict:
+    if trial_id not in trials_by_id():
+        raise HTTPException(404, "Trial not found")
+    criteria = current_criteria(storage.get("registry", trial_id))
+    if not criteria:
+        raise HTTPException(409, "Criteria not extracted yet")
+    return criteria
+
+
+@app.put("/api/trials/{trial_id}/criteria")
+async def edit_criteria(trial_id: str, change: CriteriaEdit):
+    """A clinician removes or adds criteria of a study. Any change needs a new confirmation."""
+    from engine_trialmatch import clinician_criteria
+
+    criteria = extracted_criteria(trial_id)
+    known = {item["id"] for item in criteria["criteria"]}
+    if not set(change.removed) <= known:
+        raise HTTPException(404, "Criterion not found")
+    previous = criteria_edit(trial_id)
+    previous = previous if previous and previous["base_key"] == criteria["key"] else None
+    icd = diagnosis_icd(criteria)
+    previous_added = (previous or {}).get("added", [])
+    # Kept additions keep their IDs (their per-patient decisions stay valid); new ones are numbered after them.
+    number = max((entry["number"] for entry in previous_added), default=0)
+    added = []
+    for item in change.added:
+        text = item.text.strip()
+        kept = next((old for old in previous_added if (old["role"], old["text"]) == (item.role, text)), None)
+        if not kept:
+            number += 1
+            kept = {"number": number, "role": item.role, "text": text,
+                    "criteria": clinician_criteria(trial_id, item.role, text, number, icd)}
+        added.append(kept)
+    removed = sorted(set(change.removed))
+    version = edit_version(removed, added)
+    edit = {
+        "scope": "criteria",
+        "trial_id": trial_id,
+        "base_key": criteria["key"],
+        "removed": removed,
+        "added": added,
+        "version": version,
+        "verified": bool(previous and previous["version"] == version and previous.get("verified")),
+        "verified_at": previous.get("verified_at") if previous and previous["version"] == version else None,
+        "edited_at": datetime.now(UTC).isoformat(),
+    }
+    storage.put("edits", f"criteria:{trial_id}", trial_id, edit)
+    job = new_job("criteria")
+    task = asyncio.create_task(asyncio.to_thread(run_criteria_job, job, trial_id, edit))
+    job_tasks.add(task)
+    task.add_done_callback(job_tasks.discard)
+    return {"edit": edit, "job": job}
+
+
+def run_criteria_job(job: dict, trial_id: str, edit: dict) -> None:
+    job.update(state="running")
+    evaluate_added(trial_id, edit, job)
+    job.update(state="done", message="Dokončeno s upozorněním" if job["errors"] else "Dokončeno")
+
+
+@app.put("/api/trials/{trial_id}/criteria/verified")
+def verify_criteria(trial_id: str, verification: CriteriaVerification):
+    """A clinician confirms (or withdraws the confirmation of) the study's criteria as they are now."""
+    criteria = extracted_criteria(trial_id)
+    edit = criteria_edit(trial_id)
+    if not edit or edit["base_key"] != criteria["key"]:
+        edit = {"scope": "criteria", "trial_id": trial_id, "base_key": criteria["key"], "removed": [], "added": [],
+                "version": edit_version([], [])}
+    edit = {**edit, "verified": verification.verified,
+            "verified_at": datetime.now(UTC).isoformat() if verification.verified else None}
+    storage.put("edits", f"criteria:{trial_id}", trial_id, edit)
+    return criteria_review(edit, criteria["key"])
 
 
 class JobRequest(BaseModel):
@@ -478,6 +711,23 @@ async def run_job(job: dict, request: JobRequest) -> None:
         )
 
 
+def new_job(kind: str) -> dict:
+    for finished in list(jobs)[: max(0, len(jobs) - MAX_JOBS + 1)]:
+        del jobs[finished]
+    job_id = secrets.token_hex(8)
+    job = {
+        "id": job_id,
+        "state": "queued",
+        "kind": kind,
+        "done": 0,
+        "total": 0,
+        "message": "Čeká na zpracování",
+        "errors": [],
+    }
+    jobs[job_id] = job
+    return job
+
+
 @app.post("/api/jobs")
 async def create_job(request: JobRequest):
     if request.kind not in ("registry", "screen"):
@@ -490,19 +740,7 @@ async def create_job(request: JobRequest):
         raise HTTPException(404, "Patient not found")
     if any(identifier not in trials_by_id() for identifier in request.trial_ids):
         raise HTTPException(404, "Trial not found")
-    for finished in list(jobs)[: max(0, len(jobs) - MAX_JOBS + 1)]:
-        del jobs[finished]
-    job_id = secrets.token_hex(8)
-    job = {
-        "id": job_id,
-        "state": "queued",
-        "kind": request.kind,
-        "done": 0,
-        "total": 0,
-        "message": "Čeká na zpracování",
-        "errors": [],
-    }
-    jobs[job_id] = job
+    job = new_job(request.kind)
     task = asyncio.create_task(run_job(job, request))
     job_tasks.add(task)
     task.add_done_callback(job_tasks.discard)

@@ -2,12 +2,14 @@
 
 from main import apply_decision_edits
 
+ITEM = {"requirement": "r", "role": "inclusion", "source": {"source_id": "registry", "quote": "q"}}
 CRITERIA = {
     "criteria": [
-        {"id": "I1", "tm": {"evaluability": "auto"}},
-        {"id": "I2", "tm": {"evaluability": "auto"}},
-        {"id": "C1", "tm": {"evaluability": "not_assessable"}},
+        {**ITEM, "id": "I1", "tm": {"evaluability": "auto"}},
+        {**ITEM, "id": "I2", "tm": {"evaluability": "auto"}},
+        {**ITEM, "id": "C1", "tm": {"evaluability": "not_assessable"}},
     ],
+    "complete": True,
     "logic": {"op": "all", "children": [{"op": "ref", "criterion_id": c} for c in ("I1", "I2", "C1")]},
 }
 MATCH = {
