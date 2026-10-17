@@ -102,10 +102,9 @@ body.nis-mode #main{font-family:Tahoma,Verdana,"Segoe UI",Arial,sans-serif;font-
 .nis-list{max-height:calc(100vh - 100px);overflow:auto}
 .nis-list-head,.nis-box-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;font-weight:700;color:#fff;background:linear-gradient(#4f6f8f,#3b5a79);padding:4px 8px}
 .nis-search{padding:5px;background:#e4eaf0;border-bottom:1px solid #9fb0c2}.nis-search input{width:100%;min-height:24px;font:inherit;font-size:11px;border:1px solid #8a9bb0;border-radius:0;padding:2px 6px}
-.nis-row{display:grid;grid-template-columns:minmax(0,1fr) 34px 34px 46px 40px;gap:4px;width:100%;text-align:left;background:#fff;border:0;border-bottom:1px solid #e3e8ee;border-radius:0;padding:4px 8px;font:inherit;font-size:11px;color:#1d2a36;min-height:0}
+.nis-row{display:grid;grid-template-columns:minmax(0,1fr) 40px 36px 60px;gap:4px;width:100%;text-align:left;background:#fff;border:0;border-bottom:1px solid #e3e8ee;border-radius:0;padding:4px 8px;font:inherit;font-size:11px;color:#1d2a36;min-height:0}
 .nis-row:nth-of-type(even){background:#f4f7fa}.nis-row:hover{background:#fff7d6}.nis-row.active{background:#c9daec;outline:1px solid #6d8fb3}
 .nis-row-head{position:sticky;top:0;background:#dde5ee!important;font-weight:700;color:#3b5a79;cursor:default}.nis-row-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
-.nis-flag{display:inline-block;background:#167763;color:#fff;font-size:9px;font-weight:700;padding:0 4px;border-radius:2px}
 .nis-main{min-width:0}
 .nis-patient-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 10px;background:#eef2f6;border-bottom:1px solid #9fb0c2;flex-wrap:wrap}
 .nis-patient-head h2{font-family:inherit;font-size:16px;font-weight:700;color:#1d2a36;margin:0}
@@ -158,3 +157,11 @@ body.nis-mode .trial-widget{font-family:"Inter",system-ui,sans-serif}
 .quick-button svg{width:12px;height:12px}.quick-button:hover{background:var(--green-soft)}
 .quick-button.not-met{color:var(--red)}.quick-button.not-met:hover{background:var(--red-soft)}
 @media (max-width:850px){.criterion-line{flex-wrap:wrap}.criterion-side{padding:0 0 10px 32px;flex-wrap:wrap}}
+/* --- Diagnoses on the patient card, confirmed by the clinician --- */
+.dx-block{padding:14px 0 16px;border-top:1px solid #eef1ee;margin:0 27px}.dx-block .section-heading{margin-bottom:8px}
+.dx-table{width:100%}.dx-table td{padding:8px 0}.dx-table td:first-child{width:90px}.dx-table td:nth-child(2),.dx-table td:last-child{text-align:left;width:auto;font-weight:500}.dx-table th{text-align:left;font-size:10px;color:var(--muted);font-weight:600;padding:4px 8px 4px 0}
+.dx-review{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px}
+.dx-status{display:flex;flex-direction:column;gap:4px}.dx-status small{font-size:10px;color:var(--muted)}.dx-status .status-pill{align-self:flex-start}
+.dx-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dx-actions input{min-width:200px}
+.study-dx-note{font-size:9px;color:var(--amber);margin-top:6px}
+@media (max-width:1150px){.dx-block{margin:0 20px}}

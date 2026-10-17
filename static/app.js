@@ -1,4 +1,4 @@
-const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', history:[], trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
+const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', history:[], dxEditing:false, dxDraft:'', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
 const labels = {met:'Splněno', not_met:'Nesplněno', unknown:'Lidská kontrola', missing:'Chybí údaje'};
 const statusIcons = {met:'circle-check', not_met:'circle-x', unknown:'circle-help', missing:'file-question'};
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
@@ -116,15 +116,49 @@ function patientSheet() {
   const sheet = `
     <section class="medical-sheet" aria-label="Zdravotní karta">
       <div class="identity-row"><div class="patient-avatar">${icon('user-round')}</div><div class="identity-copy"><h2>${escapeHtml(patient.name)}</h2><div class="identity-meta"><span class="id-label">${escapeHtml(patient.id)}</span><span>·</span><span>${patient.synthetic ? 'Syntetická ukázka' : 'Pseudonymizovaný záznam'}</span>${patient.deceased ? '<span class="status-pill status-not_met">Záznam o úmrtí</span>' : ''}</div></div><div class="record-meta">Poslední dostupný záznam<strong>${date(patient.snapshot_at)}</strong>${patient.synthetic ? 'Ukázková dokumentace' : 'Posunuté datum datasetu'}</div></div>
+      ${diagnosisSection(patient)}
       <div class="metric-grid">${metrics.map(metric=>`<div class="metric"><div class="metric-label">${icon(metric.icon)}${metric.name}</div><div class="metric-value">${escapeHtml(metric.value)}<small>${metric.unit || ''}</small></div>${metric.evidence ? evidenceButton(metric.evidence,`Zdroj: ${metric.name}`) : '<div class="metric-foot">Údaj není doložen</div>'}</div>`).join('')}</div>
     </section>`;
   const records = `
     <div class="record-columns"><section><div class="section-heading">${icon('notebook-tabs')}<h3>Poslední záznamy</h3><span class="count">${patient.notes} zpráv</span></div>
       ${patient.recent_notes.length ? patient.recent_notes.slice(0,6).map(note=>`<button class="note-entry" data-source="${escapeHtml(note.id)}"><span class="note-date">${date(note.date)}</span><span><span class="note-title">${escapeHtml(note.title)}</span><span class="note-id">${escapeHtml(note.id)}</span></span>${icon('arrow-up-right')}</button>`).join('') : '<p class="empty-note">V dostupném exportu nejsou textové zprávy.</p>'}
       <div class="snapshot-note">${icon('clock-3')}Časové údaje odpovídají snapshotu dokumentace.</div></section>
-      <div><section><div class="section-heading">${icon('clipboard-plus')}<h3>Diagnózy v záznamu</h3>${evidenceButton(patient.evidence?.dx||{source_id:demographicsSource,quote:`diagnozy: ${patient.diagnoses}`},'Zdroj diagnóz')}</div>${diagnosisCodes(patient).length ? diagnosisCodes(patient).map(code=>`<div class="diagnosis-line"><span class="code-tag">${escapeHtml(code)}</span><span>${diagnosisName(code)}</span></div>`).join('') : '<p class="empty-note">Kódy nejsou v kohortě uvedeny.</p>'}</section>
-      <section class="section-gap"><div class="section-heading">${icon('test-tubes')}<h3>Laboratorní výsledky</h3><span class="count">Poslední hodnoty</span></div>${displayedLabs.length ? `<table class="mini-table"><tbody>${displayedLabs.map(lab=>`<tr><td>${escapeHtml(lab.name)}<div class="cell-subtitle">${date(lab.date)}</div></td><td>${escapeHtml(lab.value)} <span class="muted">${escapeHtml(lab.unit)}</span></td><td>${evidenceButton({source_id:lab.source_id},`Zdroj: ${lab.name}`)}</td></tr>`).join('')}</tbody></table>` : '<p class="empty-note">Laboratorní hodnoty nejsou v dostupném záznamu doloženy.</p>'}</section></div></div>`;
+      <div>
+      <section><div class="section-heading">${icon('test-tubes')}<h3>Laboratorní výsledky</h3><span class="count">Poslední hodnoty</span></div>${displayedLabs.length ? `<table class="mini-table"><tbody>${displayedLabs.map(lab=>`<tr><td>${escapeHtml(lab.name)}<div class="cell-subtitle">${date(lab.date)}</div></td><td>${escapeHtml(lab.value)} <span class="muted">${escapeHtml(lab.unit)}</span></td><td>${evidenceButton({source_id:lab.source_id},`Zdroj: ${lab.name}`)}</td></tr>`).join('')}</tbody></table>` : '<p class="empty-note">Laboratorní hodnoty nejsou v dostupném záznamu doloženy.</p>'}</section></div></div>`;
   return {sheet, records};
+}
+
+// The patient's diagnoses pair them with studies once a clinician confirms them; until then every study is shown.
+function diagnosisSection(patient) {
+  const review = patient.diagnosis_review;
+  const codes = review ? review.codes : diagnosisCodes(patient);
+  const source = evidenceButton(patient.evidence?.dx || {source_id:patient.synthetic ? 'demo-note' : 'cohort', quote:`diagnozy: ${patient.diagnoses}`}, 'Zdroj diagnóz');
+  const rows = codes.length ? codes.map(code => `<tr><td><span class="code-tag">${escapeHtml(code)}</span></td><td>${diagnosisName(code)}</td></tr>`).join('') : '<tr><td colspan="2" class="muted">Diagnóza není v záznamu uvedena.</td></tr>';
+  let control = '';
+  if (review && state.mode !== 'demo') {
+    const status = review.verified
+      ? `<span class="status-pill status-met">${icon('shield-check')}Potvrzeno lékařem ${date(review.verified_at)}</span><small>Zobrazeny jen studie pro tyto diagnózy (a studie s nejistou diagnózou).</small>`
+      : `<span class="status-pill status-unknown">${icon('shield-alert')}Nepotvrzeno</span><small>Zobrazeny všechny studie bez ohledu na diagnózu.</small>`;
+    const buttons = state.dxEditing
+      ? `<input id="dx-codes" value="${escapeHtml(state.dxDraft)}" placeholder="Kódy MKN-10, např. C61, C64" aria-label="Kódy MKN-10"><button class="primary-button" data-dx="save">${icon('check')}Uložit a potvrdit</button><button class="secondary-button" data-dx="cancel">Zrušit</button>`
+      : `${review.verified ? '' : `<button class="primary-button" data-dx="confirm">${icon('shield-check')}Potvrdit diagnózy</button>`}<button class="secondary-button" data-dx="edit">${icon('pencil')}Upravit</button>${review.verified ? `<button class="secondary-button" data-dx="unconfirm">Zrušit potvrzení</button>` : ''}`;
+    control = `<div class="dx-review"><div class="dx-status">${status}${review.edited ? `<small>Upraveno lékařem; v kohortě: ${escapeHtml(review.cohort.join(', ') || '—')}</small>` : ''}</div><div class="dx-actions">${buttons}</div></div>`;
+  }
+  return `<div class="dx-block"><div class="section-heading">${icon('clipboard-plus')}<h3>Diagnózy</h3>${source}</div><table class="mini-table dx-table"><thead><tr><th>MKN-10</th><th>Název</th></tr></thead><tbody>${rows}</tbody></table>${control}</div>`;
+}
+
+async function reviewDiagnoses(action) {
+  const patientId = encodeURIComponent(state.patient.id);
+  if (action === 'edit') {state.dxEditing = true; state.dxDraft = state.patient.diagnosis_review.codes.join(', '); render(); document.querySelector('#dx-codes')?.focus(); return;}
+  if (action === 'cancel') {state.dxEditing = false; render(); return;}
+  const body = action === 'save' ? {codes:state.dxDraft.split(/[,;\s]+/).filter(Boolean), verified:true}
+    : {codes:action === 'confirm' ? state.patient.diagnosis_review.codes : null, verified:action === 'confirm'};
+  if (action === 'unconfirm') body.codes = state.patient.diagnosis_review.edited ? state.patient.diagnosis_review.codes : null;
+  await api(`/api/patients/${patientId}/diagnoses`, {method:'PUT', body:JSON.stringify(body)});
+  state.dxEditing = false;
+  state.patient = await api(`/api/patients/${patientId}`);
+  render();
+  toast(action === 'unconfirm' ? 'Potvrzení diagnóz zrušeno – zobrazeny všechny studie.' : 'Diagnózy potvrzeny – studie spárovány podle diagnózy.');
 }
 
 function patientMetrics(patient) {
@@ -140,28 +174,25 @@ function patientMetrics(patient) {
   ];
 }
 const diagnosisCodes = patient => (patient.diagnoses || '').split(/[,;\s]+/).filter(Boolean);
-const diagnosisName = code => code.startsWith('C61') ? 'Zhoubný novotvar prostaty' : code.startsWith('C64') ? 'Zhoubný novotvar ledviny' : 'Diagnóza MKN-10';
+const icdNames = {C09:'Zhoubný novotvar mandle', C11:'Zhoubný novotvar nosohltanu', C16:'Zhoubný novotvar žaludku', C18:'Zhoubný novotvar tlustého střeva', C22:'Zhoubný novotvar jater', C23:'Zhoubný novotvar žlučníku', C25:'Zhoubný novotvar slinivky břišní', C34:'Zhoubný novotvar průdušky a plíce', C50:'Zhoubný novotvar prsu', C54:'Zhoubný novotvar těla děložního', C56:'Zhoubný novotvar vaječníku', C61:'Zhoubný novotvar prostaty', C64:'Zhoubný novotvar ledviny', C67:'Zhoubný novotvar močového měchýře', R64:'Kachexie'};
+const diagnosisName = code => icdNames[code.slice(0, 3)] || 'Diagnóza MKN-10';
 
 // TrialScreen window: the same patient card above the study matches; records, diagnoses and labs fold out on click.
 function patientCard() {
   const {sheet, records} = patientSheet();
-  const label = state.stripOpen ? 'Skrýt záznamy, diagnózy a laboratoř' : 'Zobrazit záznamy, diagnózy a laboratoř';
+  const label = state.stripOpen ? 'Skrýt záznamy a laboratoř' : 'Zobrazit záznamy a laboratoř';
   return `<div class="patient-card">${sheet}<button class="card-toggle" data-action="toggle-strip" aria-expanded="${state.stripOpen}">${icon(state.stripOpen ? 'chevron-up' : 'chevron-down')}${label}</button>${state.stripOpen ? records : ''}</div>`;
 }
 
 // Simulated hospital information system (NIS): the start page, deliberately in a different, denser hospital style.
 // TrialScreen only appears as the embedded widget, which opens the TrialScreen window.
-// Same rule as the widget: candidates only in studies that are not closed to recruitment.
-function candidateCounts() {
-  const closed = new Set((state.overview?.trials || []).filter(trial => closedStatuses.includes(trial.registry?.status)).map(trial => trial.id));
-  return Object.fromEntries((state.overview?.patients || []).map(entry => [entry.id, entry.results.filter(result => isCandidate(result) && !closed.has(result.trial_id)).length]));
-}
-
+// NIS shows only what the hospital system holds: no TrialScreen results, nothing extracted from notes by our rules.
 function nisPatients() {
-  const counts = candidateCounts();
-  return cohort().filter(patient => searchHit([patient.id, patient.name, patient.diagnoses], state.nisQuery))
-    .sort((first, second) => (counts[second.id] || 0) - (counts[first.id] || 0) || Number(second.target) - Number(first.target) || (second.notes || 0) - (first.notes || 0))
-    .slice(0, 60);
+  const matches = cohort().filter(patient => searchHit([patient.id, patient.name, patient.diagnoses], state.nisQuery));
+  const shown = matches.slice(0, 60);
+  // The open patient stays in the list even when it falls outside the first page.
+  if (!shown.some(patient => patient.id === state.patient.id) && matches.some(patient => patient.id === state.patient.id)) shown.unshift(state.patient);
+  return shown;
 }
 
 const nisBox = (title, body, extra = '') => `<section class="nis-box"><div class="nis-box-head"><span>${title}</span>${extra}</div>${body}</section>`;
@@ -169,14 +200,15 @@ const nisSource = (evidence, label = 'zdroj') => evidence?.source_id ? `<button 
 
 function renderNis() {
   const patient = state.patient;
-  const counts = candidateCounts();
-  const list = nisPatients().map(item => `<button class="nis-row ${item.id === patient.id ? 'active' : ''}" data-patient="${escapeHtml(item.id)}"><span class="nis-row-name">${escapeHtml(item.name)}</span><span>${escapeHtml(item.age || '—')}</span><span>${sexLabel(item.sex)}</span><span>${escapeHtml(item.diagnoses || '—')}</span><span>${counts[item.id] ? `<span class="nis-flag" title="TrialScreen: ${counts[item.id]} studií k posouzení">KS ${counts[item.id]}</span>` : ''}</span></button>`).join('');
+  const list = nisPatients().map(item => `<button class="nis-row ${item.id === patient.id ? 'active' : ''}" data-patient="${escapeHtml(item.id)}"><span class="nis-row-name">${escapeHtml(item.name)}</span><span>${escapeHtml(item.age || '—')}</span><span>${sexLabel(item.sex)}</span><span>${escapeHtml(item.diagnoses || '—')}</span></button>`).join('');
   const widget = trialWidget() || `<div class="trial-widget muted-widget"><span class="widget-copy"><span class="widget-eyebrow">TRIALSCREEN · KLINICKÉ STUDIE</span><small>${currentResults().length ? 'Žádná nabírající studie bez nesplněného kritéria' : 'Pacient zatím nebyl posouzen'}</small></span></div>`;
-  const basics = `<table class="nis-table nis-kv"><tbody>${patientMetrics(patient).map(metric => `<tr><th>${metric.name}</th><td>${escapeHtml(metric.value)} ${metric.unit || ''}</td><td>${metric.evidence ? nisSource(metric.evidence) : '<span class="nis-dim">nedoloženo</span>'}</td></tr>`).join('')}</tbody></table>`;
+  // Sex and age come from the hospital record; weight, height and ECOG are only written in notes, so a hospital
+  // system has no structured value for them.
+  const basics = `<table class="nis-table nis-kv"><tbody><tr><th>Pohlaví</th><td>${sexName(patient.sex)}</td></tr><tr><th>Věk</th><td>${escapeHtml(patient.age || '—')} ${patient.age ? 'let' : ''}</td></tr><tr><th>Hmotnost</th><td></td></tr><tr><th>Výška</th><td></td></tr><tr><th>WHO / ECOG</th><td></td></tr></tbody></table>`;
   const diagnoses = diagnosisCodes(patient).length ? `<table class="nis-table"><thead><tr><th>MKN-10</th><th>Název</th></tr></thead><tbody>${diagnosisCodes(patient).map(code => `<tr><td><b>${escapeHtml(code)}</b></td><td>${diagnosisName(code)}</td></tr>`).join('')}</tbody></table>` : '<p class="nis-empty">Diagnózy nejsou uvedeny.</p>';
   const notes = patient.recent_notes.length ? `<table class="nis-table"><thead><tr><th>Datum</th><th>Dokument</th><th>Číslo</th></tr></thead><tbody>${patient.recent_notes.slice(0, 10).map(note => `<tr><td>${date(note.date)}</td><td><button class="nis-doc" data-source="${escapeHtml(note.id)}">${escapeHtml(note.title)}</button></td><td class="nis-dim">${escapeHtml(note.id)}</td></tr>`).join('')}</tbody></table>` : '<p class="nis-empty">V exportu nejsou textové zprávy.</p>';
   const labs = patient.latest_labs.length ? `<table class="nis-table"><thead><tr><th>Vyšetření</th><th>Hodnota</th><th>Jednotka</th><th>Datum</th><th></th></tr></thead><tbody>${patient.latest_labs.slice(0, 14).map(lab => `<tr><td>${escapeHtml(lab.name)}</td><td><b>${escapeHtml(lab.value)}</b></td><td>${escapeHtml(lab.unit)}</td><td>${date(lab.date)}</td><td>${nisSource({source_id:lab.source_id})}</td></tr>`).join('')}</tbody></table>` : '<p class="nis-empty">Bez laboratorních výsledků.</p>';
-  return `<div class="nis-layout"><aside class="nis-list" aria-label="Pacienti ambulance"><div class="nis-list-head">Objednaní pacienti · ${cohort().length}</div><div class="nis-search"><input id="nis-search" value="${escapeHtml(state.nisQuery)}" placeholder="Hledat: jméno, ID, MKN" aria-label="Hledat pacienta"></div><div class="nis-row nis-row-head"><span>Pacient</span><span>Věk</span><span>Pohl.</span><span>Dg.</span><span></span></div>${list || '<p class="nis-empty">Nikdo neodpovídá hledání.</p>'}</aside>
+  return `<div class="nis-layout"><aside class="nis-list" aria-label="Pacienti ambulance"><div class="nis-list-head">Objednaní pacienti · ${cohort().length}</div><div class="nis-search"><input id="nis-search" value="${escapeHtml(state.nisQuery)}" placeholder="Hledat: jméno, ID, MKN" aria-label="Hledat pacienta"></div><div class="nis-row nis-row-head"><span>Pacient</span><span>Věk</span><span>Pohl.</span><span>Dg.</span></div>${list || '<p class="nis-empty">Nikdo neodpovídá hledání.</p>'}</aside>
     <section class="nis-main"><div class="nis-patient-head"><div class="nis-patient-id"><h2>${escapeHtml(patient.name)}</h2><div class="nis-meta"><span>ID ${escapeHtml(patient.id)}</span><span>${escapeHtml(patient.age || '—')} let</span><span>${sexName(patient.sex)}</span><span>Dg. ${escapeHtml(patient.diagnoses || '—')}</span><span>Posl. záznam ${date(patient.snapshot_at)}</span>${patient.deceased ? '<span class="nis-alert">Záznam o úmrtí</span>' : ''}</div></div>${widget}</div>
       <div class="nis-tabs"><span class="active">Přehled</span><span>Dekurz</span><span>Žádanky</span><span>Medikace</span><span>Výkony</span></div>
       <div class="nis-grid">${nisBox('Základní údaje', basics)}${nisBox('Diagnózy', diagnoses, nisSource(patient.evidence?.dx || {source_id:patient.synthetic ? 'demo-note' : 'cohort', quote:`diagnozy: ${patient.diagnoses}`}))}${nisBox('Dokumentace', notes, `<span class="nis-dim">${patient.notes} zpráv</span>`)}${nisBox('Laboratoř – poslední hodnoty', labs)}</div></section></div>`;
@@ -210,7 +242,7 @@ function renderMatches() {
   const result=results.find(item=>item.trial_id===state.trialId);
   const trial=trialById(state.trialId);
   const visible=result.decisions.filter(decision=>state.filter==='all'||decision.status===state.filter).sort((first,second)=>criterionOrder[first.status]-criterionOrder[second.status]);
-  return header + `<div class="matches-layout"><aside class="study-list" aria-label="Posouzené studie">${results.map(item=>{const study=trialById(item.trial_id);return `<button class="study-choice ${item.trial_id===state.trialId?'active':''}" data-trial="${escapeHtml(item.trial_id)}">${reviewIcon(item.criteria_review)}<div class="study-protocol">${escapeHtml(study?.protocol||item.trial_id)}</div><div class="study-name">${escapeHtml(study?.title||'Klinická studie')}</div><div class="study-score"><span>${metLabel(item.summary)}</span><strong title="${escapeHtml(percentTitle(item.summary))}">${item.summary.match_percent}%</strong></div>${resultProgress(item)}</button>`;}).join('')}</aside>
+  return header + `<div class="matches-layout"><aside class="study-list" aria-label="Posouzené studie">${results.map(item=>{const study=trialById(item.trial_id);return `<button class="study-choice ${item.trial_id===state.trialId?'active':''}" data-trial="${escapeHtml(item.trial_id)}">${reviewIcon(item.criteria_review)}<div class="study-protocol">${escapeHtml(study?.protocol||item.trial_id)}</div><div class="study-name">${escapeHtml(study?.title||'Klinická studie')}</div>${item.diagnosis_fit==='uncertain'?'<div class="study-dx-note">Diagnóza studie neurčena</div>':''}<div class="study-score"><span>${metLabel(item.summary)}</span><strong title="${escapeHtml(percentTitle(item.summary))}">${item.summary.match_percent}%</strong></div>${resultProgress(item)}</button>`;}).join('')}</aside>
     <section class="match-detail"><div class="trial-head"><div class="eyebrow">${escapeHtml(trial?.protocol)} · ${state.mode==='demo'?'SYNTETICKÁ STUDIE':'REGISTROVANÁ STUDIE'}</div><h2>${escapeHtml(trial?.title)}</h2><div class="trial-links">${pill(result.summary.status)}${state.mode==='demo'?'':`${reviewPill(result.criteria_review)}<button class="link-button" data-edit-criteria="${escapeHtml(result.trial_id)}">${icon('pencil')}Upravit kritéria studie</button>`}${result.registry.url?`<a href="${escapeHtml(result.registry.url)}" target="_blank" rel="noreferrer">${escapeHtml(result.registry.nct_id||'Registr')} ${icon('external-link')}</a>`:''}<span class="muted">${result.registry.site_recruiting?'Nábor na pracovišti uveden v registru':'Nábor na pracovišti nepotvrzen'}</span></div></div>
     <div class="stats-strip">${Object.entries(result.summary.counts).map(([status,count])=>`<div class="stat ${status}"><b>${count}</b>${labels[status]}</div>`).join('')}</div>
     ${result.future_watch.map(watch=>`<div class="watch-banner"><strong>${icon('calendar-clock')}${escapeHtml(watch.text)}</strong><small>${escapeHtml(watch.caveat)}</small></div>`).join('')}
@@ -738,6 +770,7 @@ document.addEventListener('click',async event=>{
     if(button.hasAttribute('data-criteria-add')){const text=state.criteriaDraft.text.trim();if(text.length<2)throw new Error('Zadejte text kritéria.');await changeCriteria(state.overviewTrial,{add:{role:state.criteriaDraft.role,text}});state.criteriaDraft={...state.criteriaDraft,text:''};render();toast('Kritérium přidáno. Vyhodnocuji u pacientů…');}
     if(button.dataset.editCriteria){navigate('overview',{overviewTab:'trials',overviewTrial:button.dataset.editCriteria,overviewFilter:'all',overviewQuery:''});state.criteriaEditing=button.dataset.editCriteria;await loadOverview();render();scrollTo(0,0);}
     if(button.dataset.action==='back')await goBack();
+    if(button.dataset.dx)await reviewDiagnoses(button.dataset.dx);
     if(button.dataset.mode){if(state.mode==='real')state.realPatientId=state.patient.id;await setMode(button.dataset.mode);}
     if(button.dataset.source)await showSource(button.dataset.source,button.dataset.quote||'',button.dataset.sourcePatient||state.patient.id);
     if(button.hasAttribute('data-close-dialog'))button.closest('dialog').close();
@@ -787,6 +820,7 @@ document.addEventListener('input',event=>{
   if(event.target.dataset.cellInput)state.draft=event.target.value;
   if(event.target.id==='criteria-text')state.criteriaDraft.text=event.target.value;
   if(event.target.id==='criterion-text')state.criterionDraft=event.target.value;
+  if(event.target.id==='dx-codes')state.dxDraft=event.target.value;
   if(event.target.id==='nis-search'){const cursor=event.target.selectionStart;state.nisQuery=event.target.value;render();const field=document.querySelector('#nis-search');field.focus();field.setSelectionRange(cursor,cursor);}
   if(event.target.id==='overview-search'){const cursor=event.target.selectionStart;state.overviewQuery=event.target.value;state.overviewLimit=40;render();const field=document.querySelector('#overview-search');field.focus();field.setSelectionRange(cursor,cursor);}
   if(event.target.id==='debug-search'){const cursor=event.target.selectionStart;state.query=event.target.value;state.page=0;render();const field=document.querySelector('#debug-search');field.focus();field.setSelectionRange(cursor,cursor);}

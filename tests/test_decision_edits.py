@@ -59,3 +59,13 @@ def test_confirming_the_screening_keeps_its_reason():
     assert decision["confirmed"] and decision["reason"] == "ok" and decision["status"] == "met"
     changed = apply_decision_edits(MATCH, CRITERIA, edit("I1", "not_met"))["decisions"][0]
     assert not changed["confirmed"] and changed["reason"] == "Doplněno lékařem."
+
+
+def test_studies_pair_by_icd_category():
+    from main import diagnosis_fit, icd_codes
+
+    assert icd_codes("Karcinom prsu C504, C61") == ["C50.4", "C61"]
+    assert diagnosis_fit(["C61"], ["C61"]) == "same"
+    assert diagnosis_fit(["C50"], ["C50.4"]) == "same"
+    assert diagnosis_fit(["C61"], ["C64"]) == "other"
+    assert diagnosis_fit(["C61"], []) == "uncertain" and diagnosis_fit([], ["C61"]) == "uncertain"

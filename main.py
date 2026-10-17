@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import secrets
 import threading
 from collections import Counter
@@ -118,6 +119,7 @@ def cached_results(
     own_edits = storage.by_owner("edits", record["id"])
     overrides = decision_edits(own_edits)
     added = {edit["trial_id"]: edit for edit in own_edits if edit.get("scope") == "added"}
+    diagnoses = patient_diagnoses(record["id"], own_edits)
     for match in storage.by_owner("matches", record["id"]):
         registry = registries.get(match["trial_id"]) if registries is not None else \
             storage.get("registry", match["trial_id"])
@@ -127,6 +129,9 @@ def cached_results(
         if not cached or not match_is_current(match, facts["key"], cached[0]["key"]):
             continue
         criteria, extraction = cached
+        fit = diagnosis_fit(diagnoses["codes"], study_diagnoses(trials_by_id()[match["trial_id"]], criteria))
+        if diagnoses["verified"] and fit == "other":
+            continue
         if match["trial_id"] not in trial_edits:
             trial_edits[match["trial_id"]] = criteria_edit(match["trial_id"])
         edit = trial_edits[match["trial_id"]]
@@ -154,6 +159,7 @@ def cached_results(
                 "snapshot_at": facts["snapshot_at"],
                 "summary": {**match["summary"], "badge": alert},
                 "criteria_review": review,
+                "diagnosis_fit": fit,
                 "criteria": {key: criteria[key] for key in ("criteria", "logic", "complete", "limitations")},
                 "registry": public_registry(registry),
                 "patient_facts": {"source_ids": facts["source_ids"], "complete": facts["complete"]},
@@ -168,6 +174,45 @@ def cached_results(
             }
         )
     return results
+
+
+# Diagnoses pair a patient with studies. Until a clinician confirms the patient's diagnoses, every study is shown;
+# afterwards only studies for the same ICD-10 category (or with no recognisable diagnosis) are.
+ICD = re.compile(r"\b([A-Z])(\d{2})(?:\.?(\d{1,2}))?\b")
+
+
+def icd_codes(text: str) -> list[str]:
+    """ICD-10 codes in free text, normalised to C50.4 / C61 (the workbook also writes C504)."""
+    return list(dict.fromkeys(f"{a}{b}" + (f".{c}" if c else "") for a, b, c in ICD.findall(text or "")))
+
+
+def patient_diagnoses(patient_id: str, own_edits: list[dict] | None = None) -> dict:
+    """The patient's diagnoses: from the cohort, or as a clinician corrected and confirmed them."""
+    own_edits = storage.by_owner("edits", patient_id) if own_edits is None else own_edits
+    edit = next((e for e in own_edits if e.get("scope") == "diagnoses"), None)
+    cohort = icd_codes(patients_by_id().get(patient_id, {}).get("diagnoses", ""))
+    return {
+        "codes": edit["codes"] if edit and edit.get("codes") is not None else cohort,
+        "cohort": cohort,
+        "edited": bool(edit and edit.get("codes") is not None and edit["codes"] != cohort),
+        "verified": bool(edit and edit.get("verified")),
+        "verified_at": edit.get("verified_at") if edit else None,
+    }
+
+
+def study_diagnoses(trial: dict, criteria: dict | None) -> list[str]:
+    """ICD-10 codes of a study: from the workbook label and the rule engine's diagnosis gate."""
+    codes = icd_codes(trial.get("diagnosis", ""))
+    if criteria:
+        codes += [code for code in diagnosis_icd(criteria) if code not in codes]
+    return codes
+
+
+def diagnosis_fit(patient: list[str], study: list[str]) -> str:
+    """same: a shared ICD-10 category; uncertain: either side has no code; other: different diagnoses."""
+    if not patient or not study:
+        return "uncertain"
+    return "same" if {code[:3] for code in patient} & {code[:3] for code in study} else "other"
 
 
 def decision_edits(own_edits: list[dict]) -> dict[tuple[str, str], dict]:
@@ -454,7 +499,33 @@ def get_patient(patient_id: str):
             for source in record["sources"].values()
         ],
         "results": cached_results(record),
+        "diagnosis_review": patient_diagnoses(patient_id),
     }
+
+
+class DiagnosesReview(BaseModel):
+    codes: list[str] | None = Field(default=None, max_length=20)  # None keeps the cohort's codes
+    verified: bool = True
+
+
+@app.put("/api/patients/{patient_id}/diagnoses")
+def review_diagnoses(patient_id: str, review: DiagnosesReview):
+    """A clinician confirms (or corrects) the patient's diagnoses; from then on studies are paired by them."""
+    load_patient(patient_id)
+    codes = None
+    if review.codes is not None:
+        entered = [code.strip().upper() for code in review.codes if code.strip()]
+        codes = icd_codes(" ".join(entered))
+        if len(codes) != len(entered):
+            raise HTTPException(400, "Invalid ICD-10 code")
+    storage.put("edits", f"diagnoses:{patient_id}", patient_id, {
+        "scope": "diagnoses",
+        "codes": codes,
+        "verified": review.verified,
+        "verified_at": datetime.now(UTC).isoformat() if review.verified else None,
+        "edited_at": datetime.now(UTC).isoformat(),
+    })
+    return patient_diagnoses(patient_id)
 
 
 @app.get("/api/patients/{patient_id}/facts")
