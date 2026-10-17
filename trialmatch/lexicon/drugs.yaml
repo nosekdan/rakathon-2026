@@ -1,0 +1,122 @@
+# Oncology drugs: folded name patterns (Czech + English + brand) -> ATC + therapy classes.
+# Classes are what trial criteria usually refer to ("prior ARPI", "prior taxane", "prior anti-PD-1").
+
+classes:
+  adt: {cs: Androgenní deprivace (ADT), en: Androgen deprivation therapy}
+  arpi: {cs: ARPI (enzalutamid, abirateron, apalutamid, darolutamid), en: AR pathway inhibitor}
+  taxane: {cs: Taxany, en: Taxane}
+  platinum: {cs: Platinové deriváty, en: Platinum}
+  chemotherapy: {cs: Chemoterapie, en: Chemotherapy}
+  anti_pd1_pdl1: {cs: Anti-PD-1/PD-L1, en: Anti-PD-1/PD-L1}
+  anti_ctla4: {cs: Anti-CTLA-4, en: Anti-CTLA-4}
+  immunotherapy: {cs: Imunoterapie, en: Immunotherapy}
+  vegf_tki: {cs: VEGFR TKI, en: VEGFR tyrosine kinase inhibitor}
+  anti_vegf: {cs: Anti-VEGF protilátka, en: Anti-VEGF antibody}
+  mtor: {cs: mTOR inhibitor, en: mTOR inhibitor}
+  hif2a: {cs: HIF-2α inhibitor, en: HIF-2α inhibitor}
+  parp: {cs: PARP inhibitor, en: PARP inhibitor}
+  cdk46: {cs: CDK4/6 inhibitor, en: CDK4/6 inhibitor}
+  endocrine_breast: {cs: Endokrinní léčba (prs), en: Endocrine therapy (breast)}
+  her2_directed: {cs: Anti-HER2 léčba, en: HER2-directed therapy}
+  adc: {cs: Konjugát protilátky s léčivem (ADC), en: Antibody-drug conjugate}
+  topo1_adc: {cs: ADC s inhibitorem topoizomerázy I, en: Topoisomerase-I inhibitor ADC}
+  anti_egfr: {cs: Anti-EGFR protilátka, en: Anti-EGFR antibody}
+  kras_inhibitor: {cs: KRAS G12C inhibitor, en: KRAS G12C inhibitor}
+  psma_radioligand: {cs: PSMA radioligandová terapie, en: PSMA radioligand therapy}
+  radium: {cs: Radium-223, en: Radium-223}
+  anti_cd20: {cs: Anti-CD20, en: Anti-CD20}
+  bispecific: {cs: Bispecifická protilátka, en: Bispecific antibody}
+  systemic: {cs: Systémová protinádorová léčba, en: Systemic anticancer therapy}
+
+drugs:
+  # prostate
+  - {name: degarelix, atc: L02BX02, classes: [adt], patterns: ['degarelix\w*', 'firmagon\w*']}
+  - {name: leuprorelin, atc: L02AE02, classes: [adt], patterns: ['leuprorelin\w*', 'leuprolid\w*', 'eligard\w*', 'lucrin\w*']}
+  - {name: goserelin, atc: L02AE03, classes: [adt], patterns: ['goserelin\w*', 'zoladex\w*']}
+  - {name: triptorelin, atc: L02AE04, classes: [adt], patterns: ['triptorelin\w*', 'diphereline\w*', 'pamorelin\w*']}
+  - {name: relugolix, atc: H01CC54, classes: [adt], patterns: ['relugolix\w*', 'orgovyx\w*']}
+  - {name: bicalutamide, atc: L02BB03, classes: [adt], patterns: ['bikalutamid\w*', 'bicalutamid\w*', 'casodex\w*']}
+  - {name: generic ADT, atc: L02A, classes: [adt], patterns: ['\badt\b', 'androgenn\w*\s+deprivac\w*', 'hormonaln\w*\s+(?:lecb|terapi)\w*', '\bhormonoterapi\w*', 'kastracn\w*\s+lecb\w*', '\blhrh\b', '\bgnrh\b']}
+  - {name: enzalutamide, atc: L02BB04, classes: [arpi], patterns: ['enzalutamid\w*', 'xtandi\w*']}
+  - {name: abiraterone, atc: L02BX03, classes: [arpi], patterns: ['abirateron\w*', 'zytiga\w*']}
+  - {name: apalutamide, atc: L02BB05, classes: [arpi], patterns: ['apalutamid\w*', 'erleada\w*']}
+  - {name: darolutamide, atc: L02BB06, classes: [arpi], patterns: ['darolutamid\w*', 'nubeqa\w*']}
+  - {name: docetaxel, atc: L01CD02, classes: [taxane, chemotherapy], patterns: ['docetax\w*', 'taxoter\w*']}
+  - {name: cabazitaxel, atc: L01CD04, classes: [taxane, chemotherapy], patterns: ['kabazitax\w*', 'cabazitax\w*', 'jevtana\w*']}
+  - {name: Lu-PSMA, atc: V10XX05, classes: [psma_radioligand], patterns: ['lu[\s-]?177[\s-]?psma\w*', '177lu\w*', 'lutecium\w*', 'lutetium\w*', 'pluvicto\w*']}
+  - {name: radium-223, atc: V10XX03, classes: [radium], patterns: ['radium\w*', 'xofigo\w*', '\bra[\s-]?223\b']}
+  - {name: olaparib, atc: L01XK01, classes: [parp], patterns: ['olaparib\w*', 'lynparza\w*']}
+  - {name: talazoparib, atc: L01XK04, classes: [parp], patterns: ['talazoparib\w*', 'talzenna\w*']}
+  - {name: niraparib, atc: L01XK02, classes: [parp], patterns: ['niraparib\w*', 'zejula\w*']}
+  - {name: rucaparib, atc: L01XK03, classes: [parp], patterns: ['rucaparib\w*', 'rubraca\w*']}
+  # kidney
+  - {name: sunitinib, atc: L01EX01, classes: [vegf_tki], patterns: ['sunitinib\w*', 'sutent\w*']}
+  - {name: pazopanib, atc: L01EX03, classes: [vegf_tki], patterns: ['pazopanib\w*', 'votrient\w*']}
+  - {name: cabozantinib, atc: L01EX07, classes: [vegf_tki], patterns: ['kabozantinib\w*', 'cabozantinib\w*', 'cabometyx\w*']}
+  - {name: lenvatinib, atc: L01EX08, classes: [vegf_tki], patterns: ['lenvatinib\w*', 'kisplyx\w*', 'lenvima\w*']}
+  - {name: axitinib, atc: L01EK01, classes: [vegf_tki], patterns: ['axitinib\w*', 'inlyta\w*']}
+  - {name: tivozanib, atc: L01EK03, classes: [vegf_tki], patterns: ['tivozanib\w*', 'fotivda\w*']}
+  - {name: sorafenib, atc: L01EX02, classes: [vegf_tki], patterns: ['sorafenib\w*', 'nexavar\w*']}
+  - {name: regorafenib, atc: L01EX05, classes: [vegf_tki], patterns: ['regorafenib\w*', 'stivarga\w*']}
+  - {name: everolimus, atc: L01EG02, classes: [mtor], patterns: ['everolimus\w*', 'afinitor\w*']}
+  - {name: temsirolimus, atc: L01EG01, classes: [mtor], patterns: ['temsirolimus\w*', 'torisel\w*']}
+  - {name: belzutifan, atc: L01XX74, classes: [hif2a], patterns: ['belzutifan\w*', 'welireg\w*', 'mk[\s-]?6482']}
+  # immunotherapy
+  - {name: pembrolizumab, atc: L01FF02, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['pembrolizumab\w*', 'keytrud\w*']}
+  - {name: nivolumab, atc: L01FF01, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['nivolumab\w*', 'opdiv\w*']}
+  - {name: atezolizumab, atc: L01FF05, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['atezolizumab\w*', 'tecentriq\w*']}
+  - {name: durvalumab, atc: L01FF03, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['durvalumab\w*', 'imfinzi\w*']}
+  - {name: avelumab, atc: L01FF04, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['avelumab\w*', 'bavencio\w*']}
+  - {name: cemiplimab, atc: L01FF06, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['cemiplimab\w*', 'libtayo\w*']}
+  - {name: tislelizumab, atc: L01FF09, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['tislelizumab\w*', 'tevimbra\w*']}
+  - {name: dostarlimab, atc: L01FF07, classes: [anti_pd1_pdl1, immunotherapy], patterns: ['dostarlimab\w*', 'jemperli\w*']}
+  - {name: ipilimumab, atc: L01FX04, classes: [anti_ctla4, immunotherapy], patterns: ['ipilimumab\w*', 'yervoy\w*']}
+  - {name: generic immunotherapy, atc: L01F, classes: [immunotherapy], patterns: ['imunoterapi\w*', 'immunotherap\w*', '\banti[\s-]?pd[\s-]?l?1\b', 'checkpoint\w*\s+inhib\w*']}
+  # chemotherapy
+  - {name: paclitaxel, atc: L01CD01, classes: [taxane, chemotherapy], patterns: ['paklitax\w*', 'paclitax\w*', '\bnab[\s-]?p\w*']}
+  - {name: cisplatin, atc: L01XA01, classes: [platinum, chemotherapy], patterns: ['cisplatin\w*', '\bcddp\b']}
+  - {name: carboplatin, atc: L01XA02, classes: [platinum, chemotherapy], patterns: ['karboplatin\w*', 'carboplatin\w*']}
+  - {name: oxaliplatin, atc: L01XA03, classes: [platinum, chemotherapy], patterns: ['oxaliplatin\w*', '\bfolfox\w*', '\bxelox\b', '\bcapox\b', '\bfolfirinox\b']}
+  - {name: irinotecan, atc: L01CE02, classes: [chemotherapy], patterns: ['irinotekan\w*', 'irinotecan\w*', '\bfolfiri\w*']}
+  - {name: fluorouracil, atc: L01BC02, classes: [chemotherapy], patterns: ['fluorouracil\w*', '\b5[\s-]?fu\b', '\bfolfox\w*', '\bfolfiri\w*']}
+  - {name: capecitabine, atc: L01BC06, classes: [chemotherapy], patterns: ['kapecitabin\w*', 'capecitabin\w*', 'xeloda\w*', '\bxelox\b', '\bcapox\b']}
+  - {name: gemcitabine, atc: L01BC05, classes: [chemotherapy], patterns: ['gemcitabin\w*', 'gemzar\w*']}
+  - {name: pemetrexed, atc: L01BA04, classes: [chemotherapy], patterns: ['pemetrexed\w*', 'alimta\w*']}
+  - {name: doxorubicin, atc: L01DB01, classes: [chemotherapy], patterns: ['doxorubicin\w*', 'adriamycin\w*', '\bac\s+(?:x|re[zž]im)']}
+  - {name: epirubicin, atc: L01DB03, classes: [chemotherapy], patterns: ['epirubicin\w*']}
+  - {name: cyclophosphamide, atc: L01AA01, classes: [chemotherapy], patterns: ['cyklofosfamid\w*', 'cyclophosphamid\w*', 'endoxan\w*']}
+  - {name: etoposide, atc: L01CB01, classes: [chemotherapy], patterns: ['etoposid\w*']}
+  - {name: vinorelbine, atc: L01CA04, classes: [chemotherapy], patterns: ['vinorelbin\w*', 'navelbin\w*']}
+  - {name: eribulin, atc: L01XX41, classes: [chemotherapy], patterns: ['eribulin\w*', 'halaven\w*']}
+  - {name: generic chemotherapy, atc: L01, classes: [chemotherapy], patterns: ['chemoterapi\w*', '\bchemo\b', 'chemotherap\w*', '\bcht\b', '\bctx\b']}
+  # breast
+  - {name: tamoxifen, atc: L02BA01, classes: [endocrine_breast], patterns: ['tamoxifen\w*']}
+  - {name: letrozole, atc: L02BG04, classes: [endocrine_breast], patterns: ['letrozol\w*', 'femara\w*']}
+  - {name: anastrozole, atc: L02BG03, classes: [endocrine_breast], patterns: ['anastrozol\w*', 'arimidex\w*']}
+  - {name: exemestane, atc: L02BG06, classes: [endocrine_breast], patterns: ['exemestan\w*', 'aromasin\w*']}
+  - {name: fulvestrant, atc: L02BA03, classes: [endocrine_breast], patterns: ['fulvestrant\w*', 'faslodex\w*']}
+  - {name: palbociclib, atc: L01EF01, classes: [cdk46], patterns: ['palbocikl\w*', 'palbocicl\w*', 'ibrance\w*']}
+  - {name: ribociclib, atc: L01EF02, classes: [cdk46], patterns: ['ribocikl\w*', 'ribocicl\w*', 'kisqali\w*']}
+  - {name: abemaciclib, atc: L01EF03, classes: [cdk46], patterns: ['abemacikl\w*', 'abemacicl\w*', 'verzenios\w*']}
+  - {name: trastuzumab, atc: L01FD01, classes: [her2_directed], patterns: ['trastuzumab(?![\s-]*(?:emtans|deruxt))\w*', 'herceptin\w*']}
+  - {name: pertuzumab, atc: L01FD02, classes: [her2_directed], patterns: ['pertuzumab\w*', 'perjeta\w*', 'phesgo\w*']}
+  - {name: T-DM1, atc: L01FD03, classes: [her2_directed, adc], patterns: ['trastuzumab[\s-]*emtansin\w*', '\bt[\s-]?dm1\b', 'kadcyla\w*']}
+  - {name: T-DXd, atc: L01FD04, classes: [her2_directed, adc, topo1_adc], patterns: ['trastuzumab[\s-]*deruxte\w*', '\bt[\s-]?dxd\b', 'enhertu\w*']}
+  - {name: sacituzumab govitecan, atc: L01FX17, classes: [adc, topo1_adc], patterns: ['sacituzumab\w*', 'trodelvy\w*']}
+  - {name: datopotamab deruxtecan, atc: L01FX35, classes: [adc, topo1_adc], patterns: ['datopotamab\w*', '\bdato[\s-]?dxd\b']}
+  - {name: lapatinib, atc: L01EH01, classes: [her2_directed], patterns: ['lapatinib\w*', 'tyverb\w*']}
+  - {name: tucatinib, atc: L01EH03, classes: [her2_directed], patterns: ['tukatinib\w*', 'tucatinib\w*', 'tukysa\w*']}
+  # GI
+  - {name: bevacizumab, atc: L01FG01, classes: [anti_vegf], patterns: ['bevacizumab\w*', 'avastin\w*']}
+  - {name: ramucirumab, atc: L01FG02, classes: [anti_vegf], patterns: ['ramucirumab\w*', 'cyramza\w*']}
+  - {name: cetuximab, atc: L01FE01, classes: [anti_egfr], patterns: ['cetuximab\w*', 'erbitux\w*']}
+  - {name: panitumumab, atc: L01FE02, classes: [anti_egfr], patterns: ['panitumumab\w*', 'vectibix\w*']}
+  - {name: sotorasib, atc: L01XX73, classes: [kras_inhibitor], patterns: ['sotorasib\w*', 'lumykras\w*']}
+  - {name: adagrasib, atc: L01XX77, classes: [kras_inhibitor], patterns: ['adagrasib\w*', 'krazati\w*', 'mrtx849']}
+  - {name: trifluridine/tipiracil, atc: L01BC59, classes: [chemotherapy], patterns: ['lonsurf\w*', 'trifluridin\w*']}
+  # lymphoma
+  - {name: rituximab, atc: L01FA01, classes: [anti_cd20], patterns: ['rituximab\w*', 'mabthera\w*', '\br[\s-]?chop\b']}
+  - {name: obinutuzumab, atc: L01FA03, classes: [anti_cd20], patterns: ['obinutuzumab\w*', 'gazyva\w*']}
+  - {name: CHOP, atc: L01, classes: [chemotherapy], patterns: ['\br?[\s-]?chop\b', '\bbendamustin\w*']}
+  - {name: epcoritamab, atc: L01FX27, classes: [bispecific], patterns: ['epcoritamab\w*', 'tepkinly\w*']}
+  - {name: glofitamab, atc: L01FX28, classes: [bispecific], patterns: ['glofitamab\w*', 'columvi\w*']}

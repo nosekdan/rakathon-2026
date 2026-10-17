@@ -12,6 +12,10 @@ dependencies = [
     "python-dotenv>=1.0",
     "beautifulsoup4>=4.13",
     "pydantic>=2.10",
+    # rule engine (trialmatch)
+    "pyyaml>=6.0",
+    "rank-bm25>=0.2",
+    "requests>=2.31",
 ]
 
 [dependency-groups]

@@ -1,0 +1,391 @@
+# Canonical clinical concepts shared by patient extraction and trial criteria.
+#
+# patient:  regexes on FOLDED patient text (lowercase, no diacritics; Czech, English, abbreviations)
+# criteria: regexes on FOLDED English trial criterion text
+# icd:      ICD-10 prefixes that imply the concept from structured diagnoses
+# policy:   how facts are aggregated per patient (ever = any affirmed mention wins)
+#
+# Built at development time from the eligibility criteria of all 80 FNMH trials; must be reviewed by a clinician.
+
+metastasis.any:
+  label: {cs: Metastatické onemocnění, en: Metastatic disease}
+  search_terms: "metastázy, mts, meta, generalizace, M1, stadium IV"
+  action: "Ověřit rozsah onemocnění (zobrazovací vyšetření / staging)"
+  icd: [C77, C78, C79]
+  patient:
+    - metastaz\w*
+    - metastat\w*
+    - \bmts\b
+    - \bmeta\b
+    - generaliz\w*
+    - disemin\w*
+    - sekundarism\w*
+    - \bm1[abc]?\b
+    - \bmetast\w*
+  criteria:
+    - metastatic
+    - \bmetastases\b(?! (?:to|in|of) the (?:brain|cns|liver))
+    - stage iv
+    - \bm1\b
+    - advanced or metastatic
+    - unresectable or metastatic
+  policy: ever
+
+metastasis.brain:
+  label: {cs: Metastázy CNS/mozku, en: Brain / CNS metastases}
+  search_terms: "mts CNS, mozkové metastázy, meta mozku, leptomeningeální, brain mets"
+  action: "Zvážit MR mozku"
+  icd: [C793]
+  patient:
+    - (?:mts|meta\b|metastaz\w*|sekundarism\w*|lozisk\w*)\s+(?:do\s+)?(?:cns|mozk\w*|mozecku|cerebr\w*|intrakran\w*)
+    - (?:mozkov\w*|cerebraln\w*|intrakranialn\w*)\s+(?:mts|meta\b|metastaz\w*|sekundarism\w*)
+    - brain\s+met\w*
+    - cns\s+met\w*
+    - (?:mr|ct|mri)\s+(?:mozku|mozek|brain|cns)[^.;]{0,25}?(?:mts|meta\b|metastaz\w*|metastas\w*|sekundarism\w*|lozisk\w*)
+    - leptomening\w*
+    - karcinomatozni meningitid\w*
+  criteria:
+    - brain metasta\w*
+    - cns metasta\w*
+    - central nervous system \(cns\) metasta\w*
+    - central nervous system metasta\w*
+    - leptomeningeal
+    - carcinomatous meningitis
+  policy: ever
+
+metastasis.liver:
+  label: {cs: Metastázy jater, en: Liver metastases}
+  search_terms: "mts jater, jaterní metastázy, liver mets"
+  action: "Ověřit zobrazením (CT/MR jater)"
+  icd: [C787]
+  patient:
+    - (?:mts|meta\b|metastaz\w*|sekundarism\w*|lozisk\w*)\s+(?:do\s+|v\s+)?(?:jater|jatra|hepar\w*)
+    - (?:jatern\w*|hepataln\w*)\s+(?:mts|meta\b|metastaz\w*)
+    - liver\s+met\w*
+    - hepatic\s+met\w*
+  criteria:
+    - liver metasta\w*
+    - hepatic metasta\w*
+  policy: ever
+
+metastasis.bone:
+  label: {cs: Kostní metastázy, en: Bone metastases}
+  search_terms: "kostní mts, mts skeletu, osteoplastická/osteolytická ložiska, bone mets"
+  action: "Ověřit scintigrafií skeletu / PSMA PET"
+  icd: [C795]
+  patient:
+    - (?:mts|meta\b|metastaz\w*|sekundarism\w*|lozisk\w*)\s+(?:do\s+|ve?\s+)?(?:skelet\w*|kost\w*|obratl\w*|pater\w*|panv\w*)
+    - (?:kostn\w*|skeletaln\w*|osteoplast\w*|osteolyt\w*)\s+(?:mts|meta\b|metastaz\w*|lozisk\w*|postizeni)
+    - bone\s+met\w*
+  criteria:
+    - bone metasta\w*
+    - \bbone\b[^.;]{0,25}metasta\w*
+    - bone-only
+  policy: ever
+
+metastasis.visceral:
+  label: {cs: Viscerální metastázy, en: Visceral metastases}
+  search_terms: "viscerální mts, mts plic/jater/nadledvin"
+  action: "Ověřit zobrazením (CT)"
+  icd: [C78]
+  patient:
+    - (?:mts|meta\b|metastaz\w*)\s+(?:do\s+|v\s+)?(?:plic|jater|jatra|nadledvin\w*|peritone\w*)
+    - viscer\w* (?:mts|meta\b|metastaz\w*)
+    - visceral\s+met\w*
+  criteria:
+    - visceral metasta\w*
+    - visceral disease
+  policy: ever
+
+prostate.crpc:
+  label: {cs: Kastračně rezistentní karcinom prostaty, en: Castration-resistant prostate cancer}
+  search_terms: "CRPC, mCRPC, KRPC, kastračně rezistentní"
+  action: "Ověřit stav (PSA + testosteron na ADT)"
+  patient:
+    - \bm?crpc\b
+    - \bm?krpc\b
+    - \bm?kr\s*ca\s*prost\w*
+    - kastracn\w*[\s-]*rezistent\w*
+    - kastrac\w* rezist\w*
+    - castration[\s-]*resistant
+    - hormonaln\w*[\s-]*(?:rezistent|refrakter)\w*
+  criteria:
+    - castration[\s-]*resistant
+    - \bm?crpc\b
+  policy: ever
+
+prostate.hspc:
+  label: {cs: Hormonálně senzitivní karcinom prostaty, en: Hormone-sensitive prostate cancer}
+  search_terms: "HSPC, mHSPC, hormonálně senzitivní"
+  action: "Ověřit hormonální stav onemocnění"
+  patient:
+    - \bm?hspc\b
+    - \bm?cspc\b
+    - \bm?hskp\b
+    - \bm?hspk\b
+    - hormonaln\w*[\s-]*(?:senzitiv|citliv|dependent)\w*
+    - kastracn\w*[\s-]*senzitiv\w*
+    - hormone[\s-]*sensitive
+    - castration[\s-]*sensitive
+  criteria:
+    - hormone[\s-]*sensitive
+    - castration[\s-]*sensitive
+    - \bm?hspc\b
+    - \bm?cspc\b
+  policy: ever
+
+prostate.bcr:
+  label: {cs: Biochemická recidiva, en: Biochemical recurrence}
+  search_terms: "biochemická recidiva/relaps, BCR"
+  action: "Ověřit vývoj PSA (PSADT)"
+  patient:
+    - biochemick\w* (?:relaps|recidiv|progres|selhani)\w*
+    - \bbcr\b
+    - biochemical (?:recurrence|relapse|progression)
+  criteria:
+    - biochemical (?:recurrence|relapse|progression)
+    - \bbcr\b
+  policy: ever
+
+histology.clear_cell_rcc:
+  label: {cs: Světlobuněčný RCC, en: Clear-cell RCC}
+  search_terms: "světlobuněčný, clear cell, ccRCC"
+  action: "Doplnit histologii"
+  patient:
+    - svetlobunecn\w*
+    - jasnobunecn\w*
+    - clear[\s-]*cell
+    - \bccrcc\b
+    - \bcc rcc\b
+  criteria:
+    - clear[\s-]*cell
+    - \bccrcc\b
+  policy: ever
+
+histology.adenocarcinoma:
+  label: {cs: Adenokarcinom, en: Adenocarcinoma}
+  search_terms: "adenokarcinom, adenocarcinoma"
+  action: "Doplnit histologii"
+  patient: ['adenokarcinom\w*', 'adenocarcinom\w*', '\badeno ca\b']
+  criteria: ['adenocarcinoma']
+  policy: ever
+
+histology.squamous:
+  label: {cs: Dlaždicobuněčný karcinom, en: Squamous cell carcinoma}
+  search_terms: "dlaždicobuněčný, spinocelulární, SCC, squamous"
+  action: "Doplnit histologii"
+  patient: ['dlazdicobunecn\w*', 'spinocelul\w*', 'squamous', '\bscc\b', 'epidermoidn\w*', 'spinaliom\w*']
+  criteria: ['squamous']
+  policy: ever
+
+histology.small_cell_neuroendocrine:
+  label: {cs: Malobuněčný / neuroendokrinní karcinom, en: Small cell / neuroendocrine carcinoma}
+  search_terms: "malobuněčný, neuroendokrinní, small cell, NEC"
+  action: "Doplnit histologii"
+  patient: ['(?<!ne)malobunecn\w*', '(?<!non-)(?<!non )small[\s-]*cell', 'neuroendokrin\w*', 'neuroendocrine', '\bnec\b']
+  criteria: ['(?<!non-)(?<!non )small[\s-]*cell', 'neuroendocrine']
+  policy: ever
+
+breast.hr_positive:
+  label: {cs: Hormonálně pozitivní (ER/PR+), en: HR-positive (ER/PR+)}
+  search_terms: "ER+, PR+, HR+, luminální, estrogenové receptory pozitivní"
+  action: "Doplnit stav ER/PR"
+  patient:
+    - \b(?:er|pr|pgr|hr)\s*[+]
+    - \b(?:er|pr|pgr|hr)\s*[:=]?\s*(?:pozit\w*|positiv\w*|\d{2,3}\s*%)
+    - estrogen\w*\s+(?:receptor\w*\s+)?pozit\w*
+    - hormon\w*[\s-]*pozit\w*
+    - luminal\w*
+    - hormone receptor[\s-]*positive
+  criteria:
+    - (?:hr|er|hormone[\s-]*receptor|estrogen[\s-]*receptor)[\s-]*(?:\+|positive)
+    - \ber\+
+    - \bhr\+
+  policy: ever
+
+breast.her2_positive:
+  label: {cs: HER2 pozitivní, en: HER2-positive}
+  search_terms: "HER2 3+, HER2 pozitivní, amplifikace"
+  action: "Doplnit stav HER2"
+  patient:
+    - her[\s-]?2(?:/neu)?\s*[:=]?\s*(?:\+\+\+|3\s*\+|pozit\w*|positiv\w*|amplifik\w*|amplif\w*)
+    - her[\s-]?2[\s-]*(?:enriched|pozitivni)
+  criteria:
+    - her2[\s-]*(?:\+|positive)
+    - her2 overexpress\w*
+  policy: ever
+
+breast.her2_low:
+  label: {cs: HER2-low, en: HER2-low}
+  search_terms: "HER2-low, HER2 1+, HER2 2+ / ISH neg."
+  action: "Doplnit stav HER2 (IHC/ISH)"
+  patient:
+    - her[\s-]?2[\s-]*low
+    - her[\s-]?2\s*[:=]?\s*(?:1\s*\+|\+(?!\+))
+    - her[\s-]?2\s*[:=]?\s*(?:2\s*\+|\+\+(?!\+))[^.]{0,40}(?:fish|sish|ish)[^.]{0,10}(?:neg|-)
+  criteria: ['her2[\s-]*low', '"ihc 1\\+"', '"ihc 2\\+/ish-"']
+  policy: ever
+
+breast.tnbc:
+  label: {cs: Triple-negativní karcinom prsu, en: Triple-negative breast cancer}
+  search_terms: "triple-negativní, TNBC"
+  action: "Doplnit stav ER/PR/HER2"
+  patient: ['triple[\s-]*negat\w*', '\btnbc\b', 'trojit\w*[\s-]*negat\w*', '\btn\s*ca\b']
+  criteria: ['triple[\s-]*negative', '\btnbc\b']
+  policy: ever
+
+biomarker.kras_g12c:
+  label: {cs: KRAS G12C, en: KRAS G12C mutation}
+  search_terms: "KRAS G12C"
+  action: "Vyšetřit mutaci KRAS"
+  patient: ["kras[^.]{0,30}g12c", "\\bg12c\\b"]
+  criteria: ["kras[^.]{0,20}g12c", "\\bg12c\\b"]
+  policy: ever
+
+biomarker.kras_mutant:
+  label: {cs: Mutace KRAS, en: KRAS mutation}
+  search_terms: "mutace KRAS"
+  action: "Vyšetřit mutaci KRAS"
+  patient: ["kras[^.]{0,20}(?:mut\\w*|pozit\\w*|g12\\w*|g13\\w*|q61\\w*)", "mut\\w*\\s+kras"]
+  criteria: ["kras[^.]{0,10}mut\\w*"]
+  policy: ever
+
+biomarker.brca_hrr:
+  label: {cs: Mutace BRCA/HRR, en: BRCA / HRR alteration}
+  search_terms: "BRCA1/2, HRR, HRD"
+  action: "Vyšetřit BRCA/HRR"
+  patient:
+    - "brca[12]?[^.]{0,30}(?:mut\\w*|pozit\\w*|patogen\\w*|varian\\w*)"
+    - "\\bhrr\\b[^.]{0,30}(?:mut\\w*|pozit\\w*|alter\\w*|defic\\w*)"
+    - "\\bhrd\\b[^.]{0,15}pozit\\w*"
+    - "\\bgbrca\\b|\\bsbrca\\b|\\bbrcam\\b"
+  criteria: ["brca", "\\bhrr\\b", "homologous recombination", "\\bhrd\\b"]
+  policy: ever
+
+biomarker.msi_high:
+  label: {cs: MSI-H / dMMR, en: MSI-H / dMMR}
+  search_terms: "MSI-H, dMMR, mikrosatelitová nestabilita"
+  action: "Vyšetřit MSI/MMR"
+  patient: ["msi[\\s-]*h\\b", "\\bdmmr\\b", "mikrosatelit\\w*\\s+nestabil\\w*", "mmr[\\s-]*defic\\w*", "msi[\\s-]*high"]
+  criteria: ["msi[\\s-]*h\\b", "\\bdmmr\\b", "mismatch repair[\\s-]*deficien\\w*", "msi[\\s-]*high"]
+  policy: ever
+
+biomarker.pdl1_positive:
+  label: {cs: PD-L1 pozitivní, en: PD-L1 positive}
+  search_terms: "PD-L1, TPS, CPS"
+  action: "Vyšetřit PD-L1"
+  patient:
+    - "pd[\\s-]?l1[^.]{0,25}(?:pozit\\w*|positiv\\w*|\\b(?:tps|cps)\\s*[:=]?\\s*[1-9]\\d*)"
+    - "pd[\\s-]?l1[^.]{0,10}\\b[1-9]\\d?\\s*%"
+  criteria: ["pd-?l1[\\s-]*positive", "pd-?l1[^.]{0,30}(?:cps|tps)\\s*(?:>=|≥|>)\\s*1"]
+  policy: ever
+
+biomarker.egfr_mutant:
+  label: {cs: Mutace EGFR, en: EGFR mutation}
+  search_terms: "mutace EGFR, exon 19/21, L858R"
+  action: "Vyšetřit EGFR"
+  patient: ["\\begfr[^.]{0,20}(?:mut\\w*|exon|del\\s*19|l858r|pozit\\w*)"]
+  criteria: ["\\begfr[^.]{0,10}(?:mut\\w*|sensitizing)"]
+  policy: ever
+
+comorbidity.hiv:
+  label: {cs: HIV, en: HIV infection}
+  search_terms: "HIV pozitivní, infekce HIV, AIDS"
+  action: "Ověřit v anamnéze"
+  icd: [B20, B21, B22, B23, B24, Z21]
+  patient: ["\\bhiv\\s*(?:pozit\\w*|infekc\\w*|nemoc\\w*|\\+(?!\\s*p24))", "infekc\\w*\\s+hiv", "\\baids\\b", "hiv[\\s-]*positive", "\\bhiv[\\s-]*infection"]
+  criteria: ["\\bhiv\\b", "human immunodeficiency virus"]
+  policy: ever
+
+comorbidity.hepatitis:
+  label: {cs: Hepatitida B/C, en: Hepatitis B / C}
+  search_terms: "hepatitida B/C, HBV, HCV, HBsAg"
+  action: "Ověřit v anamnéze / sérologie"
+  icd: [B16, B17, B18, B19]
+  patient: ["hepatitid\\w*\\s+(?:typu\\s+)?[bc]\\b", "\\bhbv\\b", "\\bhcv\\b", "\\bhbsag\\s*(?:\\+|pozit\\w*)", "\\bvhb\\b", "\\bvhc\\b"]
+  criteria: ["hepatitis b", "hepatitis c", "\\bhbv\\b", "\\bhcv\\b"]
+  policy: ever
+
+comorbidity.ild_pneumonitis:
+  label: {cs: Intersticiální plicní proces / pneumonitida, en: Interstitial lung disease / pneumonitis}
+  search_terms: "intersticiální plicní proces, pneumonitida, plicní fibróza, ILD"
+  action: "Ověřit v anamnéze"
+  icd: [J84, J70]
+  patient: ["intersticialn\\w*\\s+plicn\\w*", "\\bild\\b", "pneumonitid\\w*", "plicn\\w*\\s+fibroz\\w*", "fibroz\\w*\\s+plic", "interstitial lung", "pneumonitis", "\\bipf\\b"]
+  criteria: ["interstitial lung disease", "\\bild\\b", "pneumonitis", "pulmonary fibrosis"]
+  policy: ever
+
+comorbidity.autoimmune:
+  label: {cs: Autoimunitní onemocnění, en: Autoimmune disease}
+  search_terms: "autoimunitní onemocnění, RA, SLE, Crohn, UC, psoriáza, RS"
+  action: "Ověřit v anamnéze"
+  icd: [M05, M06, M32, M33, M34, M35, K50, K51, L40, G35]
+  patient: ["autoimunit\\w*", "revmatoidn\\w*\\s+artritid\\w*", "systemov\\w*\\s+lupus", "\\bsle\\b", "crohn\\w*", "ulcerozn\\w*\\s+kolitid\\w*", "psoria\\w*", "roztrousen\\w*\\s+skleroz\\w*", "autoimmune", "sklerodermi\\w*", "vaskulitid\\w*"]
+  criteria: ["autoimmune"]
+  policy: ever
+
+comorbidity.cardiac:
+  label: {cs: Závažné kardiovaskulární onemocnění, en: Significant cardiovascular disease}
+  search_terms: "infarkt myokardu, srdeční selhání, NYHA III–IV, CMP, iktus"
+  action: "Ověřit kardiologickou anamnézu"
+  icd: [I21, I22, I50, I63, I64]
+  patient: ["infarkt\\w*\\s+myokard\\w*", "\\bakutni\\s+infarkt", "\\bstemi\\b", "\\bnstemi\\b", "srdecn\\w*\\s+selhan\\w*", "\\bnyha\\s*(?:iii|iv|3|4)\\b", "\\bcmp\\b", "\\biktus\\b", "cevn\\w*\\s+mozkov\\w*\\s+prihod\\w*", "myocardial infarction", "heart failure", "\\bstroke\\b"]
+  criteria: ["myocardial infarction", "congestive heart failure", "heart failure", "cardiac disease", "cardiovascular disease", "\\bstroke\\b", "nyha class (?:iii|iv|ii)"]
+  policy: ever
+
+comorbidity.transplant:
+  label: {cs: Transplantace orgánu, en: Organ transplant}
+  search_terms: "st. p. transplantaci orgánu"
+  action: "Ověřit v anamnéze"
+  icd: [Z94]
+  patient: ["\\bstav\\s+po\\s+transplant\\w*", "transplant\\w*\\s+(?:ledvin|jater|srdce|plic|organ)\\w*", "\\bstp\\s+transplant\\w*", "allogen\\w*\\s+transplant\\w*"]
+  criteria: ["transplant"]
+  policy: ever
+
+procedure.prostatectomy:
+  label: {cs: Radikální prostatektomie, en: Radical prostatectomy}
+  search_terms: "prostatektomie, RAPE, RALP"
+  action: "Ověřit v anamnéze"
+  patient: ["prostatektomi\\w*", "prostatectom\\w*", "\\brarp\\b", "\\bralp\\b", "\\brpe\\b", "\\brape\\b", "\\brrp\\b"]
+  criteria: ["prostatectomy"]
+  policy: ever
+
+procedure.orchiectomy:
+  label: {cs: Orchiektomie, en: Orchiectomy}
+  search_terms: "orchiektomie"
+  action: "Ověřit v anamnéze"
+  patient: ["orchiektomi\\w*", "orchiectom\\w*", "orchidektomi\\w*", "subkapsularn\\w*\\s+orchi\\w*"]
+  criteria: ["orchiectomy", "orchidectomy"]
+  policy: ever
+
+procedure.nephrectomy:
+  label: {cs: Nefrektomie, en: Nephrectomy}
+  search_terms: "nefrektomie"
+  action: "Ověřit v anamnéze"
+  patient: ["nefrektomi\\w*", "nephrectom\\w*", "resekc\\w*\\s+ledvin\\w*"]
+  criteria: ["nephrectomy"]
+  policy: ever
+
+therapy.radiotherapy:
+  label: {cs: Radioterapie, en: Radiotherapy}
+  search_terms: "radioterapie, ozařování, RT, SBRT, brachyterapie, Gy"
+  action: "Ověřit předchozí radioterapii"
+  patient: ["radioterapi\\w*", "\\bozar\\w*", "\\brt\\b", "\\bsbrt\\b", "\\bsrs\\b", "stereotakt\\w*", "brachyterap\\w*", "\\bimrt\\b", "\\bvmat\\b", "\\bgy\\b"]
+  criteria: ["radiotherapy", "radiation therapy", "\\bradiation\\b"]
+  policy: ever
+
+status.measurable_disease:
+  label: {cs: Měřitelné onemocnění (RECIST), en: Measurable disease (RECIST)}
+  search_terms: "měřitelné ložisko, RECIST"
+  action: "Ověřit měřitelné onemocnění (CT dle RECIST)"
+  patient: ["meritel\\w*\\s+(?:loz\\w*|onemocn\\w*)", "\\brecist\\b[^.]{0,30}(?:cil\\w*|target|meritel\\w*)", "measurable disease"]
+  criteria: ["measurable disease", "measurable lesion", "per recist", "recist v?1\\.1"]
+  policy: ever
+
+status.progression:
+  label: {cs: Progrese onemocnění, en: Disease progression}
+  search_terms: "progrese, PD, progression"
+  action: "Ověřit aktuální odpověď na léčbu"
+  patient: ["\\bprogres\\w*", "\\bpd\\b", "progression"]
+  criteria: ["progress\\w* (?:on|after|following|during)", "disease progression", "progressed"]
+  policy: latest

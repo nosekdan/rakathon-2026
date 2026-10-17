@@ -73,6 +73,55 @@ sqlite3 .cache/trialscreen.sqlite3 'SELECT patient_id, trial_id, status, match_p
 | `storage.py` | The SQLite store |
 | `main.py` | HTTP API and the background job runner |
 | `precompute.py` | CLI for batch precomputation |
+| `engine_trialmatch.py`, `trialmatch/` | Rule engine (lexicons, rules, deterministic comparison) behind the same three stages |
+
+## Rule engine (trialmatch)
+
+Any stage can run on a deterministic rule engine instead of a language model. It needs no API key, no patient data
+leaves the machine, and it takes about 0.1 s per patient and 0.05 s per comparison on a laptop CPU. Select it like
+a deployment in `.env`:
+
+```sh
+PATIENT_MODEL_DEPLOYMENT=trialmatch
+TRIAL_MODEL_DEPLOYMENT=trialmatch
+MODEL_DEPLOYMENT=trialmatch            # or trialmatch+llm, see below
+uv run python precompute.py --patient PAC-… --trial ARASTEP --compare --max-new 1000 --execute
+```
+
+Results have exactly the shape of the model stages (same keys, tables, UI, clinician edits and benchmark), so the
+two can be compared side by side. `engine_trialmatch.py` adapts the engine in `trialmatch/`:
+
+- **Patient → facts.** Czech/English lexicons and rules (`trialmatch/lexicon/*.yaml`) read every note. The
+  lexicons map concepts, drugs to ATC classes and labs to units and ULN. The rules detect sections (family history
+  is not about the patient), negation and uncertainty (`bez meta`, `susp.`, `doporučujeme zahájit`). Structured
+  labs keep their reference ranges for ×ULN criteria. Every fact is an exact located quote, with one fact per piece
+  of evidence a comparison can cite.
+- **Study → criteria.** Registry text is split into atomic criteria, which the rules map to machine-readable
+  conditions: ECOG ≤ n, lab thresholds with unit conversion, metastases, prior therapy classes, comorbidities, and
+  age/sex/diagnosis gates. Criteria the rules cannot structure are kept as `Nestrukturováno: …` (→ `missing`), and
+  administrative ones as `Nelze posoudit z dokumentace` (→ `unknown`). The diagnosis gate comes from the workbook.
+- **Compare.** Deterministic code (thresholds, units, time windows). "Not found" is `missing`, never `met`.
+  Exclusions with extra conditions ("active", "with new lesions") become `unknown` rather than `not_met`.
+- **`trialmatch+llm`** lets a local model judge the unstructured criteria from retrieved sentences of the
+  patient's notes. Set `TM_LLM_BASE_URL` (any OpenAI-compatible endpoint, e.g. Ollama `http://127.0.0.1:11434/v1`)
+  and `TM_LLM_MODEL`. Non-local hosts are refused. An answer without a verbatim quote is discarded, and a "no" from
+  the model becomes `unknown`, so the local model never excludes a patient.
+
+`trials/` holds the public registry data the rules were developed on:
+
+- `raw/`: ClinicalTrials.gov records for all 79 workbook studies.
+- `criteria/`: the rule-structured drafts.
+- `mapping.csv`: manual NCT matches for the 7 protocols that cannot be matched by identifier, e.g. CA071-1000-004.
+  `resolve_trial` does not use it yet, so those studies are still skipped by `precompute.py`.
+
+Known limits of this proof of concept:
+
+- A spot check of 110 rule hits gave precision of 10/10 for prior ARPI, cardiac and autoimmune history, and 8–9/10
+  for bone/liver metastases and CRPC.
+- Precision was only 3–5/10 for brain metastases, ILD/pneumonitis, hepatitis and BRCA/HRR, where lesion words, lab
+  orders and vaccinations are read as diagnoses.
+- About a quarter of criteria stay unstructured without the local model.
+- Clinicians review every result; the engine never decides enrolment.
 
 ## Precompute
 

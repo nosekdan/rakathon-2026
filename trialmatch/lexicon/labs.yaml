@@ -1,0 +1,104 @@
+# Canonical lab tests: how to find them in lab.csv (Czech names / NČLP) and in trial criteria (English),
+# plus the canonical unit and conversions from units used in trials.
+#
+# unit: canonical unit used for comparison. Values in lab.csv are converted with `local_factor`.
+# criteria_units: unit regex (folded) -> factor that converts the criterion value to the canonical unit.
+
+anc:
+  label: {cs: Absolutní počet neutrofilů, en: Absolute neutrophil count}
+  action: "Odběr krevního obrazu s diferenciálem"
+  local_names: ["Neutrofily#", "Neutrofily abs."]
+  unit: 10^9/L
+  criteria: ["absolute neutrophil count", "\\banc\\b", "neutrophils?"]
+  criteria_units: {"x\\s*10\\s*\\^?\\s*9\\s*/\\s*l|10\\^?9/l|g/l|giga/l": 1, "/\\s*mm\\s*\\^?\\s*3|/\\s*(?:µ|u|mc)l|cells/": 0.001}
+platelets:
+  label: {cs: Trombocyty, en: Platelets}
+  action: "Odběr krevního obrazu"
+  local_names: ["PLT", "Trombocyty"]
+  unit: 10^9/L
+  criteria: ["platelets?(?: count)?", "\\bplt\\b"]
+  criteria_units: {"x\\s*10\\s*\\^?\\s*9\\s*/\\s*l|10\\^?9/l|g/l": 1, "/\\s*mm\\s*\\^?\\s*3|/\\s*(?:µ|u|mc)l": 0.001}
+hemoglobin:
+  label: {cs: Hemoglobin, en: Hemoglobin}
+  action: "Odběr krevního obrazu"
+  local_names: ["HGB", "Hemoglobin"]
+  unit: g/L
+  criteria: ["ha?emoglobin", "\\bhgb\\b", "\\bhb\\b"]
+  criteria_units: {"g\\s*/\\s*dl": 10, "g\\s*/\\s*l": 1, "mmol\\s*/\\s*l": 16.11}
+creatinine:
+  label: {cs: Kreatinin, en: Serum creatinine}
+  action: "Odběr biochemie (kreatinin)"
+  local_names: ["Kreatinin"]
+  unit: umol/L
+  criteria: ["(?:serum )?creatinine(?! clearance)"]
+  criteria_units: {"mg\\s*/\\s*dl": 88.42, "(?:µ|u)mol\\s*/\\s*l": 1}
+  uln_capable: true
+egfr:
+  label: {cs: eGFR / clearance kreatininu, en: eGFR / creatinine clearance}
+  action: "Odběr biochemie (kreatinin/eGFR)"
+  local_names: ["eGFR-krea-(CKD-EPI)", "eGFR-cyst. C (Grubb)", "Clearance kreatininu korigovaná", "Clearance kreatininu odhadnutá"]
+  unit: mL/min
+  local_factor: 60   # ml/s -> ml/min
+  criteria: ["creatinine clearance", "\\bcrcl\\b", "\\begfr\\b", "glomerular filtration rate", "\\bclcr\\b"]
+  criteria_units: {"ml\\s*/\\s*min": 1, "ml\\s*/\\s*s": 60}
+bilirubin:
+  label: {cs: Bilirubin celkový, en: Total bilirubin}
+  action: "Odběr jaterních testů"
+  local_names: ["Bilirubin celkový"]
+  unit: umol/L
+  criteria: ["(?:total |serum )?bilirubin", "\\btbil\\b", "\\btbl\\b"]
+  criteria_units: {"mg\\s*/\\s*dl": 17.1, "(?:µ|u)mol\\s*/\\s*l": 1}
+  uln_capable: true
+ast:
+  label: {cs: AST, en: AST}
+  action: "Odběr jaterních testů"
+  local_names: ["AST"]
+  unit: ukat/L
+  criteria: ["\\bast\\b", "aspartate aminotransferase", "\\bsgot\\b"]
+  criteria_units: {"u\\s*/\\s*l|iu\\s*/\\s*l": 0.01667}
+  uln_capable: true
+alt:
+  label: {cs: ALT, en: ALT}
+  action: "Odběr jaterních testů"
+  local_names: ["ALT"]
+  unit: ukat/L
+  criteria: ["\\balt\\b", "alanine aminotransferase", "\\bsgpt\\b"]
+  criteria_units: {"u\\s*/\\s*l|iu\\s*/\\s*l": 0.01667}
+  uln_capable: true
+albumin:
+  label: {cs: Albumin, en: Albumin}
+  action: "Odběr biochemie (albumin)"
+  local_names: ["Albumin"]
+  unit: g/L
+  criteria: ["(?:serum )?albumin"]
+  criteria_units: {"g\\s*/\\s*dl": 10, "g\\s*/\\s*l": 1}
+psa:
+  label: {cs: PSA, en: PSA}
+  action: "Odběr PSA"
+  local_names: ["PSA WHO", "PSA"]
+  unit: ug/L
+  criteria: ["\\bpsa\\b(?! doubling)", "prostate[\\s-]specific antigen(?! doubling)"]
+  criteria_units: {"ng\\s*/\\s*ml|(?:µ|u)g\\s*/\\s*l": 1}
+testosterone:
+  label: {cs: Testosteron, en: Testosterone}
+  action: "Odběr testosteronu"
+  local_names: ["Testosteron"]
+  unit: nmol/L
+  criteria: ["testosterone"]
+  criteria_units: {"ng\\s*/\\s*dl": 0.0347, "nmol\\s*/\\s*l": 1, "ng\\s*/\\s*ml": 3.47}
+weight:
+  label: {cs: Hmotnost, en: Body weight}
+  action: "Zapsat hmotnost"
+  local_names: []
+  unit: kg
+  modifiable: true
+  criteria: ["body weight", "\\bweigh(?:t|s|ing)\\b"]
+  criteria_units: {"kg": 1, "lbs?|pounds?": 0.4536}
+bmi:
+  label: {cs: BMI, en: Body mass index}
+  action: "Zapsat výšku a hmotnost (BMI)"
+  local_names: []
+  unit: kg/m2
+  modifiable: true
+  criteria: ["\\bbmi\\b", "body mass index"]
+  criteria_units: {"kg\\s*/\\s*m": 1}

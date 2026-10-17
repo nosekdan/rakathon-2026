@@ -17,6 +17,7 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
+import engine_trialmatch
 import storage
 from repository import ROOT, fingerprint, select_sources
 from screening import (
@@ -316,6 +317,10 @@ async def extract_patient(record: dict) -> dict:
     cached = storage.get("facts", task["key"])
     if cached:
         return cached
+    if engine_trialmatch.is_engine(PATIENT_MODEL):
+        result = engine_trialmatch.extract_patient(record, task, PATIENT_MODEL)
+        storage.put("facts", task["key"], record["id"], result)
+        return result
     extraction = await model_json(PatientExtraction, PATIENT_MODEL, PATIENT_INSTRUCTION, task["payload"])
     allowed = {source["id"]: source for source in task["payload"]["sources"]}
     facts: list[dict] = []
@@ -368,6 +373,10 @@ async def extract_trial(trial: dict, registry: dict) -> dict:
     cached = storage.get("criteria", task["key"])
     if cached:
         return cached
+    if engine_trialmatch.is_engine(TRIAL_MODEL):
+        result = engine_trialmatch.extract_trial(trial, registry, task, TRIAL_MODEL)
+        storage.put("criteria", task["key"], trial["id"], result)
+        return result
     extraction = await model_json(
         TrialExtraction, TRIAL_MODEL, TRIAL_INSTRUCTION, task["payload"], check=check_criteria
     )
@@ -420,6 +429,10 @@ async def compare(trial: dict, facts: dict, criteria: dict) -> dict:
     cached = storage.get("matches", key)
     if match_is_current(cached, facts["key"], criteria["key"]):
         return cached
+    if engine_trialmatch.is_engine(MODEL):
+        result = await asyncio.to_thread(engine_trialmatch.compare, trial, facts, criteria, MODEL, VERSION)
+        storage.put("matches", key, facts["patient_id"], result)
+        return result
     extraction = TrialExtraction.model_validate(criteria)
     # Patient facts precede criteria so one patient's prompt prefix is shared across trials (prompt caching).
     comparison = await model_json(

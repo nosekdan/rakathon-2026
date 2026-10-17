@@ -1,0 +1,30 @@
+# Disease / treatment pathways used to spot FUTURE candidates: a trial requires a state the patient is likely to reach.
+# requires: concept the trial needs to be present (inclusion)
+# if_any:   the patient currently has one of these (present) -> "future candidate"
+# unless:   ...but not if the patient already has these (then it is not a future state, just missing/negated)
+# Must be reviewed by a clinician; deliberately conservative.
+
+- requires: prostate.crpc
+  if_any: [prostate.hspc, therapy.adt, prostate.bcr]
+  note: "Kandidát při přechodu do kastračně rezistentního stadia (progrese na ADT)"
+- requires: metastasis.any
+  if_any: [prostate.bcr]
+  note: "Kandidát při rozvoji metastáz (nyní biochemická recidiva)"
+- requires: therapy.arpi
+  if_any: [prostate.hspc, prostate.crpc, therapy.adt]
+  note: "Kandidát po léčbě ARPI (enzalutamid/abirateron/apalutamid/darolutamid)"
+- requires: therapy.taxane
+  if_any: [therapy.arpi, prostate.crpc]
+  note: "Kandidát po chemoterapii taxany"
+- requires: status.progression
+  if_any: [therapy.systemic, therapy.adt]
+  note: "Kandidát při progresi na současné léčbě"
+- requires: therapy.anti_pd1_pdl1
+  if_any: [therapy.systemic]
+  note: "Kandidát po imunoterapii anti-PD-(L)1"
+- requires: therapy.vegf_tki
+  if_any: [histology.clear_cell_rcc, therapy.anti_pd1_pdl1]
+  note: "Kandidát po léčbě VEGFR TKI"
+- requires: therapy.systemic
+  if_any: [metastasis.any, status.progression]
+  note: "Kandidát po první linii systémové léčby"
