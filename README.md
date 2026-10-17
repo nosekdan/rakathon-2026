@@ -7,6 +7,8 @@ informačnímu systému (NIS). Lékaři nenápadně ukáže, že jeho pacient m�
 které na pracovišti probíhají. Ke každé studii vidí, která kritéria pacient splňuje, která ne a co chybí doplnit.
 V přehledu může procházet všechny studie a pacienty a podívat se, jak moc k sobě sedí.
 
+![Ukázka TrialScreen: shoda pacienta s klinickými studiemi](assets/demo.png)
+
 ## Jak to funguje
 
 1. **Studie.** Kritéria účasti stahujeme z registru ClinicalTrials.gov a jazykový model je převede do
