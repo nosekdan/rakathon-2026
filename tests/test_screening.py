@@ -468,25 +468,6 @@ def test_real_import_preserves_identifiers_and_sources():
         assert record["sources"][vital["source_id"]]["text"][vital["start"] : vital["end"]] == vital["quote"]
 
 
-def test_benchmark_study_terms_and_verdicts():
-    import benchmark
-
-    mk = benchmark.study_pattern("MK-2400-001")
-    assert mk.search("Screening studie  MK  2400 -001, I")
-    assert mk.search("klinické studii MK 2400 - 0001 , žádá")
-    assert not mk.search("PSA 2400 ng/ml, 001") and not mk.search("12400-0015")
-    talapro = benchmark.study_pattern("C3441052", "TALAPRO-3 (C3441052)")
-    assert talapro.search("zařazen do studie Talapro-3") and talapro.search("protokol C3441052")
-    assert not talapro.search("placebo + enzalutamid")
-    assert benchmark.study_pattern("CELC-G-301").search("CELC G 301")
-    assert benchmark.study_pattern("Arcus PEAK-1") is None
-    assert benchmark.verdict("zarazen", "met") == "HIT"
-    assert benchmark.verdict("zarazen", "not_met") == "MISS"
-    assert benchmark.verdict("nabidnuto", "unknown") == "OPEN"
-    assert benchmark.verdict("screen_failure", "not_met") == "HIT"
-    assert benchmark.verdict("zvazovano", "met") == "N/A"
-
-
 def test_as_of_hides_later_and_undated_records(tmp_path, monkeypatch):
     import json
 

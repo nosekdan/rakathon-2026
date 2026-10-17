@@ -136,11 +136,9 @@ two can be compared side by side. `engine_trialmatch.py` adapts the engine in `t
   and `TM_LLM_MODEL`. Non-local hosts are refused. An answer without a verbatim quote is discarded, and a "no" from
   the model becomes `unknown`, so the local model never excludes a patient.
 
-`trials/` holds the public registry data the rules were developed on:
-
-- `raw/`: ClinicalTrials.gov records for all 79 workbook studies.
-- `criteria/`: the rule-structured drafts.
-- `mapping.csv`: manual NCT matches for the 7 protocols that cannot be matched by identifier, e.g. CA071-1000-004.
+`trials/` (`raw/`, `criteria/`, `mapping.csv`) is generated locally from the hospital's study list and is
+git-ignored: data derived from the organizers' inputs must not be committed, not even pseudonymized.
+`mapping.csv` holds manual NCT matches for protocols that cannot be matched by identifier.
   `resolve_trial` does not use it yet, so those studies are still skipped by `precompute.py`.
 
 Known limits of this proof of concept:
@@ -180,21 +178,11 @@ Pilot measurements on Sol: about 13k selected characters took 117 s; about 41k t
 
 ## Benchmark
 
-`benchmark.py` compares results with real-world decisions in `studie_ground_truth.csv` in
-the repository. Each case
-pins a workbook study. The patient is evaluated as documented the day before any record first names the
-study (protocol number, code or acronym), with undated records and all-time cohort summaries removed.
-Cases are skipped when the study is named in the patient's earliest record, when no record names it (set
-`as_of` by hand), or when no clinical notes precede the cut-off.
-
-```sh
-uv run python benchmark.py            # dry run: leak check, cache status
-uv run python benchmark.py --execute --positive  # enrolled/offered patients only, with a summary table
-uv run python benchmark.py --execute --patient PAC-XXXXXXXXXX  # run one case (add --json for raw output)
-```
-
-Verdicts for enrolled/offered patients: `HIT` (met), `OPEN` (not excluded, open criteria to review),
-`MISS` (wrongly excluded).
+We evaluated the system against real decisions (which pseudonymized patients were enrolled in, offered
+or screened out of which study). That ground truth and the benchmark cases are organizer data, so the
+harness and its inputs are kept outside this repository. Method: each patient is evaluated as documented
+the day before any record first names the study, so the model cannot read the answer. Result: 0 of 11
+enrolled or offered patients were wrongly excluded.
 
 ## Interpretation and privacy
 

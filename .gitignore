@@ -9,7 +9,6 @@ __pycache__/
 *.sqlite3*
 *.db
 *.csv
-!trials/mapping.csv
 *.ndjson
 .env.*
 !.env.example
@@ -19,3 +18,9 @@ rakathon-dataset-*
 .vscode/
 # patient data must never be committed
 data/
+# Organizer / hospital data: never commit, not even pseudonymized or derived (Rakathon rules)
+studie_ground_truth.csv
+benchmark.py
+trials/raw/
+trials/criteria/
+trials/mapping.csv
