@@ -1,4 +1,4 @@
-const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
+const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
 const labels = {met:'Splněno', not_met:'Nesplněno', unknown:'Lidská kontrola', missing:'Chybí údaje'};
 const statusIcons = {met:'circle-check', not_met:'circle-x', unknown:'circle-help', missing:'file-question'};
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
@@ -180,7 +180,7 @@ function renderMatches() {
   const result=results.find(item=>item.trial_id===state.trialId);
   const trial=trialById(state.trialId);
   const visible=result.decisions.filter(decision=>state.filter==='all'||decision.status===state.filter).sort((first,second)=>criterionOrder[first.status]-criterionOrder[second.status]);
-  return header + `<div class="matches-layout"><aside class="study-list" aria-label="Posouzené studie">${results.map(item=>{const study=trialById(item.trial_id);return `<button class="study-choice ${item.trial_id===state.trialId?'active':''}" data-trial="${escapeHtml(item.trial_id)}"><div class="study-protocol">${reviewIcon(item.criteria_review)}${escapeHtml(study?.protocol||item.trial_id)}</div><div class="study-name">${escapeHtml(study?.title||'Klinická studie')}</div><div class="study-score"><span>${metLabel(item.summary)}</span><strong title="${escapeHtml(percentTitle(item.summary))}">${item.summary.match_percent}%</strong></div>${resultProgress(item)}</button>`;}).join('')}</aside>
+  return header + `<div class="matches-layout"><aside class="study-list" aria-label="Posouzené studie">${results.map(item=>{const study=trialById(item.trial_id);return `<button class="study-choice ${item.trial_id===state.trialId?'active':''}" data-trial="${escapeHtml(item.trial_id)}">${reviewIcon(item.criteria_review)}<div class="study-protocol">${escapeHtml(study?.protocol||item.trial_id)}</div><div class="study-name">${escapeHtml(study?.title||'Klinická studie')}</div><div class="study-score"><span>${metLabel(item.summary)}</span><strong title="${escapeHtml(percentTitle(item.summary))}">${item.summary.match_percent}%</strong></div>${resultProgress(item)}</button>`;}).join('')}</aside>
     <section class="match-detail"><div class="trial-head"><div class="eyebrow">${escapeHtml(trial?.protocol)} · ${state.mode==='demo'?'SYNTETICKÁ STUDIE':'REGISTROVANÁ STUDIE'}</div><h2>${escapeHtml(trial?.title)}</h2><div class="trial-links">${pill(result.summary.status)}${state.mode==='demo'?'':`${reviewPill(result.criteria_review)}<button class="link-button" data-edit-criteria="${escapeHtml(result.trial_id)}">${icon('pencil')}Upravit kritéria studie</button>`}${result.registry.url?`<a href="${escapeHtml(result.registry.url)}" target="_blank" rel="noreferrer">${escapeHtml(result.registry.nct_id||'Registr')} ${icon('external-link')}</a>`:''}<span class="muted">${result.registry.site_recruiting?'Nábor na pracovišti uveden v registru':'Nábor na pracovišti nepotvrzen'}</span></div></div>
     <div class="stats-strip">${Object.entries(result.summary.counts).map(([status,count])=>`<div class="stat ${status}"><b>${count}</b>${labels[status]}</div>`).join('')}</div>
     ${result.future_watch.map(watch=>`<div class="watch-banner"><strong>${icon('calendar-clock')}${escapeHtml(watch.text)}</strong><small>${escapeHtml(watch.caveat)}</small></div>`).join('')}
@@ -409,24 +409,44 @@ function criteriaSection(trial) {
   const editing = state.criteriaEditing === trial.id && state.mode !== 'demo';
   const groups = [['inclusion','Vstupní kritéria','circle-check'], ['exclusion','Vylučovací kritéria','circle-x']];
   const removedRow = criterion => `<li class="removed"><span class="criterion-title">${escapeHtml(criterion.requirement)}</span><span class="tag-row"><span class="status-pill status-missing">${icon('trash-2')}Odebráno lékařem</span>${editing ? `<button class="link-button" data-criteria-restore="${escapeHtml(criterion.id)}">${icon('rotate-ccw')}Vrátit</button>` : ''}</span></li>`;
-  const row = criterion => `<li><span class="criterion-title">${escapeHtml(criterion.requirement)}</span><span class="criterion-reason">${escapeHtml(criterion.source.quote)}</span><span class="tag-row">${criterion.added ? `<span class="status-pill status-met">${icon('user-round-plus')}Přidáno lékařem</span>` : ''}${criterion.source.unverified && !criterion.added ? '<span class="status-pill status-unknown">Citace v registru neověřena</span>' : ''}${editing ? `<button class="link-button danger" data-criteria-remove="${escapeHtml(criterion.id)}">${icon('trash-2')}Odebrat</button>` : ''}</span></li>`;
+  const editor = criterion => `<div class="criterion-editor"><textarea id="criterion-text" maxlength="500" rows="2" aria-label="Nové znění kritéria">${escapeHtml(state.criterionDraft)}</textarea><div class="decision-actions"><button class="primary-button" data-criterion-save="${escapeHtml(criterion.id)}">${icon('check')}Uložit znění</button><button class="secondary-button" data-criterion-cancel>Zrušit</button></div><small class="muted">Původní kritérium zůstane přeškrtnuté, nové znění se vyhodnotí u všech pacientů.</small></div>`;
+  const row = criterion => `<li><span class="criterion-title">${escapeHtml(criterion.requirement)}</span><span class="criterion-reason">${escapeHtml(criterion.source.quote)}</span><span class="tag-row">${criterion.added ? `<span class="status-pill status-met">${icon('user-round-plus')}Přidáno lékařem</span>` : ''}${criterion.source.unverified && !criterion.added ? '<span class="status-pill status-unknown">Citace v registru neověřena</span>' : ''}${editing && state.criterionEditing !== criterion.id ? `<button class="link-button" data-criterion-edit="${escapeHtml(criterion.id)}">${icon('pencil')}Upravit</button><button class="link-button danger" data-criteria-remove="${escapeHtml(criterion.id)}">${icon('trash-2')}Odebrat</button>` : ''}</span>${editing && state.criterionEditing === criterion.id ? editor(criterion) : ''}</li>`;
   const addForm = editing ? `<div class="criteria-add"><div class="evidence-label">PŘIDAT KRITÉRIUM</div><div class="criteria-add-row"><select id="criteria-role" aria-label="Typ kritéria"><option value="inclusion" ${state.criteriaDraft.role === 'inclusion' ? 'selected' : ''}>Vstupní</option><option value="exclusion" ${state.criteriaDraft.role === 'exclusion' ? 'selected' : ''}>Vylučovací</option></select><input id="criteria-text" maxlength="500" value="${escapeHtml(state.criteriaDraft.text)}" placeholder="Např. ECOG ≤ 1, PSA ≥ 2 ng/ml, Hemoglobin ≥ 90 g/l, Prior docetaxel"><button class="primary-button" data-criteria-add>${icon('plus')}Přidat</button></div><small class="muted">Text se strukturuje pravidly a vyhodnotí u všech posouzených pacientů. Co pravidla nerozpoznají, zůstane k posouzení lékařem.</small></div>` : '';
-  return criteriaBanner(trial, editing) + groups.map(([role, title, name]) => {
+  return criteriaBanner(trial, editing) + criteriaGroups(trial, groups, row, removedRow) + addForm + criteriaFooter(trial, editing) + criteriaLimits(trial);
+}
+
+function criteriaGroups(trial, groups, row, removedRow) {
+  return groups.map(([role, title, name]) => {
     const items = trial.criteria.criteria.filter(criterion => criterion.role === role);
     const removed = (trial.removed || []).filter(criterion => criterion.role === role);
     return items.length || removed.length ? sectionTitle(name, title, items.length) + `<ol class="criteria-list">${items.map(row).join('')}${removed.map(removedRow).join('')}</ol>` : '';
-  }).join('') + addForm + (trial.criteria.complete && !trial.criteria.limitations?.length ? '' : `<div class="assessment-foot">${trial.criteria.complete ? '' : '<div>Extrakce kritérií není úplná, ověřte původní znění v registru.</div>'}${(trial.criteria.limitations || []).map(limit => `<div>${escapeHtml(limit)}</div>`).join('')}</div>`);
+  }).join('');
 }
 
-// One confirmation for the study's criteria, plus an edit mode for removing and adding criteria.
+function criteriaLimits(trial) {
+  return (trial.criteria.complete && !trial.criteria.limitations?.length ? '' : `<div class="assessment-foot">${trial.criteria.complete ? '' : '<div>Extrakce kritérií není úplná, ověřte původní znění v registru.</div>'}${(trial.criteria.limitations || []).map(limit => `<div>${escapeHtml(limit)}</div>`).join('')}</div>`);
+}
+
+// The study's review state on top; the confirmation sits below the list, so the clinician goes through all of it.
 function criteriaBanner(trial, editing) {
   if (state.mode === 'demo') return '';
   const review = trial.criteria_review || {};
-  const editButton = `<button class="secondary-button" data-criteria-edit="${escapeHtml(trial.id)}">${icon(editing ? 'check' : 'pencil')}${editing ? 'Hotovo' : 'Upravit'}</button>`;
   const changes = review.edited ? ` · upraveno lékařem (${(trial.removed || []).length} odebráno, ${trial.criteria.criteria.filter(item => item.added).length} přidáno)` : '';
   const stale = review.stale ? '<small>Registr mezitím přinesl nová kritéria; dřívější úpravy lékaře nejsou použity.</small>' : '';
-  if (review.verified) return `<div class="review-banner verified">${icon('shield-check')}<span><strong>Kritéria potvrzena lékařem</strong><small>${date(review.verified_at)}${changes}</small></span>${editButton}<button class="secondary-button" data-criteria-verify="0">Zrušit potvrzení</button></div>`;
-  return `<div class="review-banner">${icon('shield-alert')}<span><strong>Kritéria navržena automaticky – čekají na potvrzení lékařem</strong><small>${editing ? 'Odeberte kritéria, která pro pracoviště neplatí, nebo přidejte chybějící. Každá změna vyžaduje nové potvrzení.' : 'Zkontrolujte kritéria proti protokolu, případně je upravte a potvrďte.'}${changes}</small>${stale}</span>${editButton}<button class="primary-button" data-criteria-verify="1">${icon('shield-check')}Potvrdit kritéria</button></div>`;
+  const editButton = editing ? '' : `<button class="secondary-button" data-criteria-edit="${escapeHtml(trial.id)}">${icon('pencil')}Upravit</button>`;
+  if (review.verified) return `<div class="review-banner verified">${icon('shield-check')}<span><strong>Kritéria potvrzena lékařem</strong><small>${date(review.verified_at)}${changes}</small></span>${editButton}</div>`;
+  return `<div class="review-banner">${icon('shield-alert')}<span><strong>Kritéria navržena automaticky – čekají na potvrzení lékařem</strong><small>${editing ? 'Upravte, odeberte nebo přidejte kritéria. Potvrzení je na konci seznamu; každá změna vyžaduje nové potvrzení.' : 'Projděte kritéria proti protokolu; potvrzení je na konci seznamu.'}${changes}</small>${stale}</span>${editButton}</div>`;
+}
+
+function criteriaFooter(trial, editing) {
+  if (state.mode === 'demo') return '';
+  const review = trial.criteria_review || {};
+  const done = editing ? `<button class="secondary-button" data-criteria-edit="${escapeHtml(trial.id)}">${icon('check')}Hotovo</button>` : '';
+  const confirm = review.verified
+    ? `<button class="secondary-button" data-criteria-verify="0">Zrušit potvrzení</button>`
+    : `<button class="primary-button" data-criteria-verify="1">${icon('shield-check')}Potvrdit kritéria</button>`;
+  const text = review.verified ? `Potvrzeno lékařem ${date(review.verified_at)}.` : `Prošli jste všech ${trial.criteria.criteria.length} kritérií? Potvrzením je schválíte pro screening všech pacientů.`;
+  return `<div class="criteria-footer"><span>${text}</span>${done}${confirm}</div>`;
 }
 
 // Saves the whole edit (removed IDs + added texts); the server recomputes the added criteria for every patient.
@@ -498,7 +518,7 @@ function renderOverviewTrials() {
   if (!listed.length) return `<p class="empty-note">Žádná studie neodpovídá hledání.</p>`;
   if (!listed.some(item => item.trial.id === state.overviewTrial)) state.overviewTrial = listed.find(item => item.trial.id === state.trialId)?.trial.id || listed[0].trial.id;
   const selected = listed.find(item => item.trial.id === state.overviewTrial);
-  return `<div class="matches-layout"><aside class="study-list" aria-label="Studie v databázi">${listed.slice(0, state.overviewLimit).map(({trial, rows}) => {const counts = tally(rows.map(row => row.result));return `<button class="study-choice ${trial.id === state.overviewTrial ? 'active' : ''}" data-overview-trial="${escapeHtml(trial.id)}"><div class="study-protocol">${trial.criteria ? reviewIcon(trial.criteria_review) : ''}${escapeHtml(trial.protocol)} · ${escapeHtml(recruitment[trial.registry?.status] || 'Stav nezjištěn')}</div><div class="study-name">${escapeHtml(trial.title)}</div><div class="study-score"><span>${trial.criteria ? `${trial.criteria} kritérií` : trial.registry?.state === 'resolved' ? 'Kritéria neextrahována' : 'Nepropojeno s registrem'}${rows.length ? ` · ${rows.filter(row => isCandidate(row.result)).length} kandidátů z ${rows.length}` : ''}</span>${rows.length ? `<strong>${rows.filter(row => isCandidate(row.result)).length}</strong>` : ''}</div>${rows.length ? tallyTrack(counts) : ''}</button>`;}).join('')}${listPager(listed.length)}</aside>${renderTrialDetail(selected.trial, selected.rows)}</div>`;
+  return `<div class="matches-layout"><aside class="study-list" aria-label="Studie v databázi">${listed.slice(0, state.overviewLimit).map(({trial, rows}) => {const counts = tally(rows.map(row => row.result));return `<button class="study-choice ${trial.id === state.overviewTrial ? 'active' : ''}" data-overview-trial="${escapeHtml(trial.id)}">${trial.criteria ? reviewIcon(trial.criteria_review) : ''}<div class="study-protocol">${escapeHtml(trial.protocol)} · ${escapeHtml(recruitment[trial.registry?.status] || 'Stav nezjištěn')}</div><div class="study-name">${escapeHtml(trial.title)}</div><div class="study-score"><span>${trial.criteria ? `${trial.criteria} kritérií` : trial.registry?.state === 'resolved' ? 'Kritéria neextrahována' : 'Nepropojeno s registrem'}${rows.length ? ` · ${rows.filter(row => isCandidate(row.result)).length} kandidátů z ${rows.length}` : ''}</span>${rows.length ? `<strong>${rows.filter(row => isCandidate(row.result)).length}</strong>` : ''}</div>${rows.length ? tallyTrack(counts) : ''}</button>`;}).join('')}${listPager(listed.length)}</aside>${renderTrialDetail(selected.trial, selected.rows)}</div>`;
 }
 
 function factRow(patientId, fact) {
@@ -666,8 +686,11 @@ document.addEventListener('click',async event=>{
     if(button.dataset.openPatient)await openMatch(button.dataset.openPatient,button.dataset.openTrial);
     if(button.hasAttribute('data-facts-edit')){state.editMode=!state.editMode;state.editing=null;render();}
     if(button.dataset.confirmAll)await confirmAll(button.dataset.confirmAll==='1');
-    if(button.dataset.criteriaEdit){state.criteriaEditing=state.criteriaEditing===button.dataset.criteriaEdit?null:button.dataset.criteriaEdit;render();}
+    if(button.dataset.criteriaEdit){state.criteriaEditing=state.criteriaEditing===button.dataset.criteriaEdit?null:button.dataset.criteriaEdit;state.criterionEditing=null;render();}
     if(button.dataset.criteriaVerify)await verifyStudyCriteria(state.overviewTrial,button.dataset.criteriaVerify==='1');
+    if(button.dataset.criterionEdit){const item=state.details[detailKey('trial',state.overviewTrial)].criteria.criteria.find(criterion=>criterion.id===button.dataset.criterionEdit);state.criterionEditing=item.id;state.criterionDraft=item.source.quote;render();document.querySelector('#criterion-text')?.focus();}
+    if(button.hasAttribute('data-criterion-cancel')){state.criterionEditing=null;render();}
+    if(button.dataset.criterionSave){const id=button.dataset.criterionSave;const text=state.criterionDraft.trim();if(text.length<2)throw new Error('Zadejte text kritéria.');const item=state.details[detailKey('trial',state.overviewTrial)].criteria.criteria.find(criterion=>criterion.id===id);state.criterionEditing=null;await changeCriteria(state.overviewTrial,{remove:id,add:{role:item.role,text}});toast('Kritérium upraveno. Vyhodnocuji u pacientů…');}
     if(button.dataset.criteriaRemove)await changeCriteria(state.overviewTrial,{remove:button.dataset.criteriaRemove});
     if(button.dataset.criteriaRestore)await changeCriteria(state.overviewTrial,{restore:button.dataset.criteriaRestore});
     if(button.hasAttribute('data-criteria-add')){const text=state.criteriaDraft.text.trim();if(text.length<2)throw new Error('Zadejte text kritéria.');await changeCriteria(state.overviewTrial,{add:{role:state.criteriaDraft.role,text}});state.criteriaDraft={...state.criteriaDraft,text:''};render();toast('Kritérium přidáno. Vyhodnocuji u pacientů…');}
@@ -720,6 +743,7 @@ document.addEventListener('change',async event=>{
 document.addEventListener('input',event=>{
   if(event.target.dataset.cellInput)state.draft=event.target.value;
   if(event.target.id==='criteria-text')state.criteriaDraft.text=event.target.value;
+  if(event.target.id==='criterion-text')state.criterionDraft=event.target.value;
   if(event.target.id==='nis-search'){const cursor=event.target.selectionStart;state.nisQuery=event.target.value;render();const field=document.querySelector('#nis-search');field.focus();field.setSelectionRange(cursor,cursor);}
   if(event.target.id==='overview-search'){const cursor=event.target.selectionStart;state.overviewQuery=event.target.value;state.overviewLimit=40;render();const field=document.querySelector('#overview-search');field.focus();field.setSelectionRange(cursor,cursor);}
   if(event.target.id==='debug-search'){const cursor=event.target.selectionStart;state.query=event.target.value;state.page=0;render();const field=document.querySelector('#debug-search');field.focus();field.setSelectionRange(cursor,cursor);}

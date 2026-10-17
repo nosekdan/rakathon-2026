@@ -144,3 +144,9 @@ body.nis-mode .trial-widget{font-family:"Inter",system-ui,sans-serif}
 .criteria-add{margin:14px 0;padding:12px 14px;border:1px dashed var(--line);border-radius:6px;background:#fff}
 .criteria-add-row{display:flex;gap:8px;margin:8px 0 6px;flex-wrap:wrap}.criteria-add-row input{flex:1;min-width:220px}
 .criteria-add small{font-size:10px}
+.study-choice{position:relative}.study-choice>.review-icon{position:absolute;top:12px;right:12px;margin:0}.study-choice>.review-icon svg{width:19px;height:19px}
+.study-choice .study-protocol{padding-right:24px}
+.criterion-editor{margin-top:8px;display:grid;gap:6px}.criterion-editor textarea{width:100%;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;resize:vertical}
+.criterion-editor small{font-size:10px}
+.criteria-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0;padding:13px 16px;background:#fff;border:1px solid var(--line);border-left:3px solid #cbab71;font-size:11px}
+.criteria-footer span{flex:1;min-width:200px}
