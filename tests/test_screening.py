@@ -257,6 +257,30 @@ def test_stages_cache_by_input_and_compare_from_facts(monkeypatch):
     [view] = main.cached_results(RECORD)
     assert view["summary"]["badge"] is False
     assert "sources" not in view["registry"]
+    monkeypatch.setattr(main, "patients_by_id", lambda: {"synthetic": RECORD})
+    monkeypatch.setattr(
+        main,
+        "patient_record",
+        lambda identifier: {**RECORD, "name": "S", "sex": "male", "age": "64", "diagnoses": ""},
+    )
+    monkeypatch.setattr(main, "trials", lambda: [TRIAL])
+    data = main.overview()
+    [entry] = data["patients"]
+    assert entry["results"][0]["status"] == "missing" and entry["results"][0]["badge"] is False
+    assert data["trials"] == [{**TRIAL, "registry": main.public_registry(REGISTRY), "criteria": 2}]
+    main.edit_fact("synthetic", "F1", main.Edit(value=" 2 ", verified=True))
+    [fact] = main.get_facts("synthetic")["facts"]
+    assert fact["value"] == "1", "the extraction itself is never overwritten"
+    assert fact["edit"]["value"] == "2" and fact["edit"]["verified"]
+    assert main.overview()["patients"][0]["verified"] == 1
+    with pytest.raises(main.HTTPException):
+        main.edit_fact("synthetic", "F9", main.Edit(verified=True))
+    monkeypatch.setattr(main, "trials_by_id", lambda: {"T-1": TRIAL})
+    main.edit_criterion("T-1", "ecog", main.Edit(value="ECOG 0-2"))
+    main.review_trial("T-1", main.Edit(verified=True))
+    detail = main.get_trial_detail("T-1")
+    assert detail["criteria"]["criteria"][1]["edit"]["value"] == "ECOG 0-2"
+    assert detail["review"]["verified"]
     monkeypatch.setattr(pipeline, "MODEL", "other")
     monkeypatch.setattr(main, "match_is_current", pipeline.match_is_current)
     assert main.cached_results(RECORD) == []

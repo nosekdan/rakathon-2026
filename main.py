@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -88,7 +89,7 @@ def cached_results(record: dict) -> list[dict]:
                     key: match[key]
                     for key in ("patient_id", "trial_id", "assessed_at", "decisions", "future_watch")
                 },
-                "model": MODEL,
+                "model": match.get("label", MODEL),
                 "snapshot_at": facts["snapshot_at"],
                 "summary": {**match["summary"], "badge": alert},
                 "criteria": {key: criteria[key] for key in ("criteria", "logic", "complete", "limitations")},
@@ -117,7 +118,69 @@ def bootstrap():
         "models": {"patient": PATIENT_MODEL, "trial": TRIAL_MODEL, "comparison": MODEL},
         "dataset": {"name": "Rakathon / FN Motol a Homolka", "dates_shifted": True, "pseudonymized": True},
         "jobs": list(jobs.values())[-5:],
+        "seeded": any(trial.get("synthetic") for trial in trials()),
     }
+
+
+def current_facts(record: dict) -> dict | None:
+    """Facts extracted from the record as it is now; None when unprocessed or the record has changed."""
+    return storage.get("facts", patient_input(record)["key"])
+
+
+def current_criteria(registry: dict | None) -> dict | None:
+    resolved = registry and registry["state"] == "resolved"
+    return storage.get("criteria", trial_input(registry)["key"]) if resolved else None
+
+
+def edits(owner: str, scope: str) -> dict[str, dict]:
+    """Clinician edits made against one extraction (scope = its key), by the fact or criterion ID."""
+    return {edit["ref"]: edit for edit in storage.by_owner("edits", owner) if edit["scope"] == scope}
+
+
+def result_summary(result: dict) -> dict:
+    return {
+        "trial_id": result["trial_id"],
+        "assessed_at": result["assessed_at"],
+        **{key: result["summary"][key] for key in ("status", "badge", "match_percent", "counts", "total")},
+    }
+
+
+@app.get("/api/overview")
+def overview():
+    """All workbook studies and every screened patient, for browsing the whole database."""
+    # Benchmark comparisons are keyed "patient:trial@date" and never shown in the UI.
+    owners = {match["patient_id"] for key, match in storage.rows("matches").items() if "@" not in key}
+    owners |= {facts["patient_id"] for facts in storage.rows("facts").values() if not facts.get("as_of")}
+    entries = []
+    for patient_id in sorted(owners & patients_by_id().keys()):
+        record = load_patient(patient_id)
+        facts = current_facts(record)
+        results = cached_results(record)
+        if not facts and not results:
+            continue
+        reviewed = edits(patient_id, facts["key"]).values() if facts else []
+        entries.append(
+            {
+                "id": patient_id,
+                "facts": len(facts["facts"]) if facts else None,
+                "verified": sum(edit["verified"] for edit in reviewed),
+                "edited": sum(edit["value"] is not None for edit in reviewed),
+                "results": [result_summary(result) for result in results],
+            }
+        )
+    registries = storage.rows("registry")
+    studies = []
+    for trial in trials():
+        registry = registries.get(trial["id"])
+        criteria = current_criteria(registry)
+        studies.append(
+            {
+                **trial,
+                "registry": public_registry(registry),
+                "criteria": len(criteria["criteria"]) if criteria else None,
+            }
+        )
+    return {"patients": entries, "trials": studies}
 
 
 @app.get("/api/demo")
@@ -138,6 +201,44 @@ def get_patient(patient_id: str):
     }
 
 
+@app.get("/api/patients/{patient_id}/facts")
+def get_facts(patient_id: str):
+    facts = current_facts(load_patient(patient_id))
+    if not facts:
+        return {"facts": None}
+    corrections = edits(patient_id, facts["key"])
+    return {
+        **{key: facts.get(key) for key in ("model", "snapshot_at", "complete", "limitations", "synthetic")},
+        "facts": [{**fact, "edit": corrections.get(fact["id"])} for fact in facts["facts"]],
+    }
+
+
+class Edit(BaseModel):
+    value: str | None = Field(default=None, max_length=2000)
+    verified: bool = False
+
+
+def save_edit(owner: str, scope: str, ref: str, edit: Edit) -> dict:
+    # An empty value means "unchanged"; the original extraction is never overwritten.
+    payload = {
+        "scope": scope,
+        "ref": ref,
+        "value": (edit.value or "").strip() or None,
+        "verified": edit.verified,
+        "edited_at": datetime.now(UTC).isoformat(),
+    }
+    storage.put("edits", f"{scope}:{ref}", owner, payload)
+    return payload
+
+
+@app.put("/api/patients/{patient_id}/facts/{fact_id}")
+def edit_fact(patient_id: str, fact_id: str, edit: Edit):
+    facts = current_facts(load_patient(patient_id))
+    if not facts or fact_id not in {fact["id"] for fact in facts["facts"]}:
+        raise HTTPException(404, "Fact not found")
+    return save_edit(patient_id, facts["key"], fact_id, edit)
+
+
 @app.get("/api/patients/{patient_id}/sources/{source_id}")
 def get_source(patient_id: str, source_id: str, trial_id: str | None = None):
     source = load_patient(patient_id)["sources"].get(source_id)
@@ -154,12 +255,42 @@ def get_trial_detail(trial_id: str):
     if trial is None:
         raise HTTPException(404, "Trial not found")
     registry = storage.get("registry", trial_id)
-    resolved = registry and registry["state"] == "resolved"
+    criteria = current_criteria(registry)
+    corrections = edits(trial_id, criteria["key"]) if criteria else {}
     return {
         **trial,
         "registry": registry,
-        "criteria": storage.get("criteria", trial_input(registry)["key"]) if resolved else None,
+        "criteria": {
+            **criteria,
+            "criteria": [{**item, "edit": corrections.get(item["id"])} for item in criteria["criteria"]],
+        }
+        if criteria
+        else None,
+        # Study-level confirmation that the extracted criteria were checked by a clinician.
+        "review": corrections.get("study"),
     }
+
+
+def trial_criteria(trial_id: str) -> dict:
+    if trial_id not in trials_by_id():
+        raise HTTPException(404, "Trial not found")
+    criteria = current_criteria(storage.get("registry", trial_id))
+    if not criteria:
+        raise HTTPException(404, "Criteria not extracted")
+    return criteria
+
+
+@app.put("/api/trials/{trial_id}/criteria/{criterion_id}")
+def edit_criterion(trial_id: str, criterion_id: str, edit: Edit):
+    criteria = trial_criteria(trial_id)
+    if criterion_id not in {item["id"] for item in criteria["criteria"]}:
+        raise HTTPException(404, "Criterion not found")
+    return save_edit(trial_id, criteria["key"], criterion_id, edit)
+
+
+@app.put("/api/trials/{trial_id}/review")
+def review_trial(trial_id: str, edit: Edit):
+    return save_edit(trial_id, trial_criteria(trial_id)["key"], "study", Edit(verified=edit.verified))
 
 
 class JobRequest(BaseModel):
