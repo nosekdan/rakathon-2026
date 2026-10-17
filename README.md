@@ -77,6 +77,12 @@ uv run python precompute.py --patient PATIENT_ID --trial MK-5684-004 --compare -
 It prints one JSON line per item with timings, stops at the first failure and exits nonzero. Error
 messages are never printed (they can echo clinical text), only error types.
 
+A stage can run on a local model instead: set its deployment to `ollama:<model>`, e.g.
+`PATIENT_MODEL_DEPLOYMENT=ollama:qwen2.5:7b` (needs `ollama serve` and `ollama pull qwen2.5:7b`). Output is
+constrained to the JSON schema while decoding; inputs longer than `OLLAMA_CONTEXT` (default 32768 tokens)
+are refused rather than silently cut. Qwen 2.5 7B could not produce a valid criteria AND/OR tree for study
+extraction, so keep `TRIAL_MODEL_DEPLOYMENT` on a cloud model (registry text is public).
+
 `MODEL_DEPLOYMENT` is the comparison/default deployment. `PATIENT_MODEL_DEPLOYMENT` and
 `TRIAL_MODEL_DEPLOYMENT` optionally override the extraction stages. Restart the app after changes.
 
@@ -94,6 +100,7 @@ Cases are skipped when the study is named in the patient's earliest record, when
 
 ```sh
 uv run python benchmark.py            # dry run: leak check, cache status
+uv run python benchmark.py --execute --positive  # enrolled/offered patients only, with a summary table
 uv run python benchmark.py --execute --patient PAC-XXXXXXXXXX  # run one case (add --json for raw output)
 ```
 

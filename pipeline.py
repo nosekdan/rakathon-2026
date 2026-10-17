@@ -36,6 +36,11 @@ PATIENT_MODEL = os.getenv("PATIENT_MODEL_DEPLOYMENT") or MODEL
 TRIAL_MODEL = os.getenv("TRIAL_MODEL_DEPLOYMENT") or MODEL
 BASE_URL = os.getenv("API_BASE_URL", "https://apim-rakathon-q7146n.azure-api.net/openai/v1/")
 VERSION = "screen-v2"
+# Deployments named "ollama:<model>" run locally, e.g. PATIENT_MODEL_DEPLOYMENT=ollama:qwen2.5:7b.
+LOCAL_PREFIX = "ollama:"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+LOCAL_CONTEXT = int(os.getenv("OLLAMA_CONTEXT", "32768"))
+LOCAL_TIMEOUT = 1800
 REGISTRY_API = "https://clinicaltrials.gov/api/v2/studies"
 # Substrings of local site names; "Homolka" appears declined as "Na Homolce" in registry listings.
 SITE_TOKENS = ("motol", "homol")
@@ -197,10 +202,61 @@ async def resolve_trial(trial: dict, refresh: bool = False) -> dict:
 # Model ---------------------------------------------------------------------------------------------
 
 
-async def model_json(schema: type[Schema], deployment: str, instruction: str, payload: dict) -> Schema:
+async def cloud_completion(
+    deployment: str, messages: list[ChatCompletionMessageParam], schema: type[BaseModel]
+) -> str:
     key = os.getenv("API_KEY")
     if not key:
         raise ValueError("API_KEY is not configured in .env")
+    async with AsyncOpenAI(
+        base_url=BASE_URL, api_key="unused", default_headers={"api-key": key}, timeout=180, max_retries=1
+    ) as client:
+        response = await client.chat.completions.create(
+            model=deployment,
+            messages=messages,
+            response_format={"type": "json_object"},
+            max_completion_tokens=14000,
+        )
+    choice = response.choices[0]
+    if choice.finish_reason == "length":
+        # A repair round would resend the whole input and truncate again.
+        raise ValueError("Model output was truncated")
+    return choice.message.content or "{}"
+
+
+async def local_completion(
+    deployment: str, messages: list[ChatCompletionMessageParam], schema: type[BaseModel]
+) -> str:
+    """A model served by Ollama on this machine. Output is constrained to the JSON schema while decoding."""
+    async with httpx.AsyncClient(timeout=LOCAL_TIMEOUT) as client:
+        response = await client.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": deployment.removeprefix(LOCAL_PREFIX),
+                "messages": messages,
+                "format": schema.model_json_schema(),
+                "stream": False,
+                "options": {"num_ctx": LOCAL_CONTEXT, "num_predict": 14000, "temperature": 0},
+            },
+        )
+        response.raise_for_status()
+        body = response.json()
+    # Ollama silently drops the start of an over-long prompt; refuse rather than extract from part of a record.
+    if body.get("prompt_eval_count", 0) >= LOCAL_CONTEXT - 16:
+        raise ValueError("Input exceeds the local model's context window")
+    if body.get("done_reason") == "length":
+        raise ValueError("Model output was truncated")
+    return body["message"]["content"] or "{}"
+
+
+async def model_json(
+    schema: type[Schema], deployment: str, instruction: str, payload: dict, check=None
+) -> Schema:
+    """Call a cloud deployment, or a local one named "ollama:<model>", and validate the JSON it returns.
+
+    check(result) may raise ValueError with a message for the model; the call is then retried once.
+    """
+    complete = local_completion if deployment.startswith(LOCAL_PREFIX) else cloud_completion
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": SYSTEM + instruction},
         {
@@ -210,36 +266,29 @@ async def model_json(schema: type[Schema], deployment: str, instruction: str, pa
             ),
         },
     ]
-    async with AsyncOpenAI(
-        base_url=BASE_URL, api_key="unused", default_headers={"api-key": key}, timeout=180, max_retries=1
-    ) as client:
-        for attempt in range(2):
-            response = await client.chat.completions.create(
-                model=deployment,
-                messages=messages,
-                response_format={"type": "json_object"},
-                max_completion_tokens=14000,
-            )
-            choice = response.choices[0]
-            if choice.finish_reason == "length":
-                # A repair round would resend the whole input and truncate again.
-                raise ValueError("Model output was truncated")
-            content = choice.message.content or "{}"
+    for attempt in range(2):
+        content = await complete(deployment, messages, schema)
+        try:
+            result = schema.model_validate_json(content)
+        except ValueError:
+            if attempt:
+                raise ValueError("Model returned invalid structured output") from None
+            feedback = "The output did not conform to the JSON schema. Correct all required fields."
+        else:
             try:
-                return schema.model_validate_json(content)
-            except ValueError:
+                if check:
+                    check(result)
+                return result
+            except ValueError as problem:
                 if attempt:
-                    raise ValueError("Model returned invalid structured output") from None
-                messages.extend(
-                    [
-                        {"role": "assistant", "content": content},
-                        {
-                            "role": "user",
-                            "content": "The output did not conform to the JSON schema. "
-                            "Correct all required fields and return valid JSON.",
-                        },
-                    ]
-                )
+                    raise
+                feedback = f"The output is invalid: {problem}."
+        messages.extend(
+            [
+                {"role": "assistant", "content": content},
+                {"role": "user", "content": feedback + " Return the complete corrected JSON."},
+            ]
+        )
     raise AssertionError("unreachable")
 
 
@@ -292,16 +341,27 @@ def trial_input(registry: dict) -> dict:
     return {"key": key, "payload": payload}
 
 
+def check_criteria(extraction: TrialExtraction) -> None:
+    criterion_ids = [criterion.id for criterion in extraction.criteria]
+    if not criterion_ids or len(set(criterion_ids)) != len(criterion_ids):
+        raise ValueError("Criterion ids must be present and unique")
+    try:
+        validate_logic(extraction.logic, set(criterion_ids))
+    except ValueError as problem:
+        raise ValueError(
+            f"{problem}. logic must be a tree of all/any groups whose leaves are "
+            '{"op": "ref", "criterion_id": ...}, referencing every criterion id; use any for alternatives'
+        ) from None
+
+
 async def extract_trial(trial: dict, registry: dict) -> dict:
     task = trial_input(registry)
     cached = storage.get("criteria", task["key"])
     if cached:
         return cached
-    extraction = await model_json(TrialExtraction, TRIAL_MODEL, TRIAL_INSTRUCTION, task["payload"])
-    criterion_ids = [criterion.id for criterion in extraction.criteria]
-    if not criterion_ids or len(set(criterion_ids)) != len(criterion_ids):
-        raise ValueError("Duplicate or missing criterion identifiers")
-    validate_logic(extraction.logic, set(criterion_ids))
+    extraction = await model_json(
+        TrialExtraction, TRIAL_MODEL, TRIAL_INSTRUCTION, task["payload"], check=check_criteria
+    )
     sources = {"registry": registry["sources"]["registry"]}
     criteria = []
     unverified = 0
@@ -346,8 +406,8 @@ def match_is_current(match: dict | None, facts_key: str, criteria_key: str) -> b
 async def compare(trial: dict, facts: dict, criteria: dict) -> dict:
     key = f"{facts['patient_id']}:{trial['id']}"
     if facts.get("as_of"):
-        # Historical (benchmark) comparisons must not overwrite the current one shown in the UI.
-        key += f"@{facts['as_of']}"
+        # Historical (benchmark) comparisons must not overwrite the UI one, or each other across models.
+        key += f"@{facts['as_of']}#{facts['key'][:8]}#{criteria['key'][:8]}"
     cached = storage.get("matches", key)
     if match_is_current(cached, facts["key"], criteria["key"]):
         return cached

@@ -226,7 +226,9 @@ def test_stages_cache_by_input_and_compare_from_facts(monkeypatch):
     )
     calls = []
 
-    async def model_json(schema, deployment, instruction, payload):
+    async def model_json(schema, deployment, instruction, payload, check=None):
+        if check:
+            check({PatientExtraction: patient, TrialExtraction: extraction, Comparison: comparison}[schema])
         calls.append((schema, payload))
         return {PatientExtraction: patient, TrialExtraction: extraction, Comparison: comparison}[schema]
 

@@ -88,13 +88,15 @@ def validate_logic(logic: Logic, criterion_ids: set[str]) -> None:
             seen.add(node.criterion_id)
         else:
             if not node.children or node.criterion_id is not None:
-                raise ValueError("Empty or invalid logic group")
+                raise ValueError(
+                    f"Empty or invalid '{node.op}' group: groups need children and no criterion_id"
+                )
             for child in node.children:
                 visit(child)
 
     visit(logic)
     if seen != criterion_ids:
-        raise ValueError("Criteria omitted from logic")
+        raise ValueError(f"Criteria omitted from logic: {', '.join(sorted(criterion_ids - seen))}")
 
 
 def evaluate_logic(logic: Logic, decisions: dict[str, Status]) -> Status:
