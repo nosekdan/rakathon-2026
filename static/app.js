@@ -620,8 +620,8 @@ function reviewBanner(facts) {
 function renderPatientDetail(summary) {
   const record = detail('facts', summary.id);
   const full = detail('patient', summary.id);
-  // The same patient card as above the study matches, with the TrialScreen widget for this patient.
-  const card = full && !full.error ? patientCard(full) + (trialWidget(full, true) || `<div class="trial-widget muted-widget"><span class="widget-copy"><span class="widget-eyebrow">TRIALSCREEN · KLINICKÉ STUDIE</span><small>${(full.results || []).length ? 'Žádná nabírající studie bez nesplněného kritéria' : 'Pacient zatím nebyl posouzen'}</small></span></div>`) : '';
+  // The TrialScreen widget for this patient, then the same patient card as above the study matches.
+  const card = full && !full.error ? (trialWidget(full, true) || `<div class="trial-widget muted-widget"><span class="widget-copy"><span class="widget-eyebrow">TRIALSCREEN · KLINICKÉ STUDIE</span><small>${(full.results || []).length ? 'Žádná nabírající studie bez nesplněného kritéria' : 'Pacient zatím nebyl posouzen'}</small></span></div>`) + patientCard(full) : '';
   const head = card || `<div class="trial-head"><div class="eyebrow">${escapeHtml(summary.id)} · ${summary.synthetic ? 'SYNTETICKÁ UKÁZKA' : 'PSEUDONYMIZOVANÝ ZÁZNAM'}</div><h2>${escapeHtml(summary.name)}</h2><div class="trial-links"><span class="muted">${escapeHtml(summary.age || 'Věk neuveden')} · ${sexName(summary.sex)} · ${escapeHtml(summary.diagnoses || 'Diagnóza neuvedena')}</span>${summary.deceased ? '<span class="status-pill status-not_met">Záznam o úmrtí</span>' : ''}</div></div>`;
   if (!record) return `<section class="match-detail">${head}${loadingBlock}</section>`;
   if (record.error) return `<section class="match-detail">${head}<p class="empty-note">${escapeHtml(record.error)}</p></section>`;
