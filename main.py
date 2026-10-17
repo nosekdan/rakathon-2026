@@ -1,7 +1,9 @@
 import asyncio
 import secrets
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -23,7 +25,7 @@ from pipeline import (
     trial_input,
 )
 from repository import patient_record, patients, patients_by_id, trials, trials_by_id
-from screening import TrialExtraction, badge
+from screening import STATUSES, Logic, TrialExtraction, badge, evaluate_logic
 
 app = FastAPI(title="TrialScreen", docs_url="/api/docs")
 STATIC = Path(__file__).parent / "static"
@@ -73,6 +75,7 @@ def cached_results(record: dict) -> list[dict]:
         criteria = storage.get("criteria", trial_input(registry)["key"])
         if not criteria or not match_is_current(match, facts["key"], criteria["key"]):
             continue
+        match = apply_decision_edits(match, criteria, decision_edits(record["id"]))
         extraction = TrialExtraction.model_validate(criteria)
         # Recruitment can change without invalidating the comparison, so the alert is decided at read time.
         alert = badge(
@@ -106,6 +109,58 @@ def cached_results(record: dict) -> list[dict]:
             }
         )
     return results
+
+
+def decision_edits(patient_id: str) -> dict[tuple[str, str], dict]:
+    """Criteria decided by a clinician for this patient, by (trial ID, criterion ID)."""
+    return {
+        (edit["trial_id"], edit["criterion_id"]): edit
+        for edit in storage.by_owner("edits", patient_id)
+        if edit.get("scope", "").startswith("decision:") and edit.get("status")
+    }
+
+
+def apply_decision_edits(match: dict, criteria: dict, overrides: dict) -> dict:
+    """Clinician decisions replace the automated ones (kept under "original") and the summary is recomputed.
+
+    The stored comparison is never overwritten; this happens at read time, like the recruitment alert.
+    """
+    mine = {criterion: edit for (trial, criterion), edit in overrides.items() if trial == match["trial_id"]}
+    if not mine:
+        return match
+    decisions = []
+    for decision in match["decisions"]:
+        edit = mine.get(decision["criterion_id"])
+        if edit:
+            detail = " · ".join(part for part in (edit.get("value"), edit.get("note")) if part)
+            decision = {
+                **decision,
+                "status": edit["status"],
+                "reason": ("Doplněno lékařem" + (f": {detail}" if detail else "")).rstrip(".") + ".",
+                "action": None,
+                "clinician": edit,
+                "original": {key: decision[key] for key in ("status", "reason", "action")},
+            }
+        decisions.append(decision)
+    counts = Counter(decision["status"] for decision in decisions)
+    summary = {**match["summary"], "counts": {status: counts[status] for status in STATUSES}}
+    summary["status"] = evaluate_logic(
+        Logic.model_validate(criteria["logic"]), {d["criterion_id"]: d["status"] for d in decisions}
+    )
+    total = summary["total"]
+    summary["coverage_percent"] = round(100 * (counts["met"] + counts["not_met"]) / total) if total else 0
+    denominator = total
+    if "assessable" in summary:
+        # Administrative criteria (consent, ...) count once the clinician has decided them.
+        administrative = {
+            item["id"] for item in criteria["criteria"] if item.get("tm", {}).get("evaluability") == "not_assessable"
+        }
+        decided = len(administrative & mine.keys())
+        summary["assessable"] = total - len(administrative) + decided
+        summary["administrative"] = len(administrative) - decided
+        denominator = summary["assessable"]
+    summary["match_percent"] = round(100 * counts["met"] / denominator) if denominator else 0
+    return {**match, "decisions": decisions, "summary": summary}
 
 
 @app.get("/api/bootstrap")
@@ -261,6 +316,35 @@ def edit_fact(patient_id: str, fact_id: str, edit: Edit):
     if not facts or fact_id not in {fact["id"] for fact in facts["facts"]}:
         raise HTTPException(404, "Fact not found")
     return save_edit(patient_id, facts["key"], fact_id, edit)
+
+
+class CriterionDecision(BaseModel):
+    status: Literal["met", "not_met"] | None = None  # None removes the clinician's decision
+    value: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+@app.put("/api/patients/{patient_id}/criteria/{trial_id}/{criterion_id}")
+def decide_criterion(patient_id: str, trial_id: str, criterion_id: str, decision: CriterionDecision):
+    """A clinician fills in a criterion the screening could not decide (or corrects one). Stored in edits."""
+    results = cached_results(load_patient(patient_id))
+    if not any(
+        result["trial_id"] == trial_id and any(d["criterion_id"] == criterion_id for d in result["decisions"])
+        for result in results
+    ):
+        raise HTTPException(404, "Criterion not found")
+    payload = {
+        "scope": f"decision:{trial_id}",
+        "ref": criterion_id,
+        "trial_id": trial_id,
+        "criterion_id": criterion_id,
+        "status": decision.status,
+        "value": (decision.value or "").strip() or None,
+        "note": (decision.note or "").strip() or None,
+        "edited_at": datetime.now(UTC).isoformat(),
+    }
+    storage.put("edits", f"decision:{patient_id}:{trial_id}:{criterion_id}", patient_id, payload)
+    return payload
 
 
 @app.get("/api/patients/{patient_id}/sources/{source_id}")

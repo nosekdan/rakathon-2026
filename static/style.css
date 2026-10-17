@@ -84,3 +84,4 @@ body:not(.popup) .app-nav{display:none}
 .cell-hint{display:block;font-size:9px;color:var(--muted);margin-top:4px}
 .criteria-list .cell-input{margin-bottom:4px}
 .review-banner .secondary-button,.review-banner .primary-button{flex-shrink:0}
+.decision-form{margin-top:16px;padding:13px 14px;background:#f7f9f7;border:1px solid var(--line);border-radius:6px;display:grid;gap:8px}.decision-form input{min-height:34px;padding:7px 10px;font-size:11px;border:1px solid var(--line);background:white}.decision-actions{display:flex;flex-wrap:wrap;gap:8px}.decision-actions .secondary-button{max-width:none}.decision-actions svg{width:13px;height:13px}
