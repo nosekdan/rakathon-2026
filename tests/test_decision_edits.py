@@ -52,3 +52,10 @@ def test_deciding_an_administrative_criterion_moves_it_into_the_denominator():
 def test_not_met_by_clinician_makes_study_not_met():
     summary = apply_decision_edits(MATCH, CRITERIA, edit("I2", "not_met"))["summary"]
     assert summary["status"] == "not_met" and summary["counts"]["not_met"] == 1
+
+
+def test_confirming_the_screening_keeps_its_reason():
+    decision = apply_decision_edits(MATCH, CRITERIA, edit("I1", "met"))["decisions"][0]
+    assert decision["confirmed"] and decision["reason"] == "ok" and decision["status"] == "met"
+    changed = apply_decision_edits(MATCH, CRITERIA, edit("I1", "not_met"))["decisions"][0]
+    assert not changed["confirmed"] and changed["reason"] == "Doplněno lékařem."

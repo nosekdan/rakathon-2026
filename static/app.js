@@ -1,4 +1,4 @@
-const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
+const state = {data:null, patient:null, demo:null, mode:'real', view:'nis', nisQuery:'', stripOpen:false, groupsOpen:new Set(), criteriaEditing:null, criteriaDraft:{role:'inclusion', text:''}, criterionEditing:null, criterionDraft:'', history:[], trialId:null, debugTab:'patients', filter:'all', query:'', page:0, expanded:new Set(), job:null, overview:null, overviewTab:'trials', overviewTrial:null, overviewPatient:null, overviewQuery:'', overviewFilter:'all', overviewLimit:40, details:{}, pending:new Set(), editing:null, draft:null, editMode:false};
 const labels = {met:'Splněno', not_met:'Nesplněno', unknown:'Lidská kontrola', missing:'Chybí údaje'};
 const statusIcons = {met:'circle-check', not_met:'circle-x', unknown:'circle-help', missing:'file-question'};
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
@@ -53,6 +53,35 @@ function heading(title, subtitle, action='') {
   return `<div class="page-heading"><div><div class="eyebrow">ONKOLOGICKÁ AMBULANCE</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${action}</div>`;
 }
 
+// Back navigation inside the TrialScreen window: views opened from another view remember where they came from;
+// the first view returns to the hospital system (closes this window).
+function navigate(view, changes={}) {
+  state.history.push({view:state.view, patientId:state.patient.id, trialId:state.trialId, overviewTab:state.overviewTab, overviewTrial:state.overviewTrial, overviewPatient:state.overviewPatient});
+  Object.assign(state, {view, criteriaEditing:null, criterionEditing:null}, changes);
+}
+
+function backButton() {
+  const previous = state.history.at(-1);
+  if (previous) return `<button class="secondary-button" data-action="back">${icon('arrow-left')}${previous.view === 'overview' ? 'Zpět na přehled databáze' : previous.view === 'matches' ? 'Zpět na shodu se studiemi' : 'Zpět'}</button>`;
+  return popup ? `<button class="secondary-button" data-action="back">${icon('arrow-left')}Zpět do NIS</button>` : '';
+}
+
+async function goBack() {
+  const previous = state.history.pop();
+  if (!previous) {
+    window.close();
+    // A window the browser does not let us close: go to the hospital system page instead.
+    setTimeout(() => {location.href = `/?${new URLSearchParams({mode:state.mode, patient:state.patient.id})}`;}, 150);
+    return;
+  }
+  const {view, patientId, ...rest} = previous;
+  Object.assign(state, rest, {view, criteriaEditing:null, criterionEditing:null});
+  if (view === 'overview') await loadOverview();
+  // Reload the patient so changes made meanwhile (edited study criteria) show up.
+  if (view === 'matches') await selectPatient(patientId);
+  render(); scrollTo(0, 0);
+}
+
 // Studies with no contradicted criterion. Unclear or missing data never hides a study:
 // the doctor decides, the model never excludes.
 const closedStatuses = ['COMPLETED', 'TERMINATED', 'WITHDRAWN', 'SUSPENDED', 'ACTIVE_NOT_RECRUITING'];
@@ -71,7 +100,8 @@ function trialWidget() {
 function openMatchesWindow() {
   const first = reviewable().find(result => result.summary.badge) || reviewable()[0];
   const query = new URLSearchParams({view:'matches', mode:state.mode, patient:state.patient.id, ...(first ? {trial:first.trial_id} : {})});
-  const opened = window.open(`/?${query}`, 'trialscreen-matches', 'popup,width=1180,height=860');
+  // TrialScreen takes the whole screen, as its own window next to the hospital system.
+  const opened = window.open(`/?${query}`, 'trialscreen-matches', `popup,left=0,top=0,width=${screen.availWidth},height=${screen.availHeight}`);
   if (!opened) throw new Error('Prohlížeč zablokoval nové okno. Povolte vyskakovací okna pro tuto stránku.');
   opened.focus();
 }
@@ -174,7 +204,7 @@ const criterionOrder = {met:0, not_met:1, unknown:2, missing:3};
 
 function renderMatches() {
   const results = [...currentResults()].sort(byFit);
-  const header = heading('Shoda se studiemi', `${escapeHtml(state.patient.name)} · ${escapeHtml(state.patient.id)} · Posouzení dostupných kritérií`) + patientCard();
+  const header = heading('Shoda se studiemi', `${escapeHtml(state.patient.name)} · ${escapeHtml(state.patient.id)} · Posouzení dostupných kritérií`, backButton()) + patientCard();
   if (!results.length) return header + `<div class="empty-state">${icon('clipboard-search')}<h2>Pacient zatím nebyl posouzen</h2><p>Žádný výsledek neznamená vyloučení. Pro tohoto pacienta zatím není uložené porovnání.</p></div>`;
   if (!results.some(result=>result.trial_id===state.trialId)) state.trialId=results[0].trial_id;
   const result=results.find(item=>item.trial_id===state.trialId);
@@ -198,6 +228,14 @@ function decisionForm(decision) {
   return `<div class="decision-form"><div class="evidence-label">DOPLNĚNÍ LÉKAŘEM</div>${original}<input data-decide-value="${id}" maxlength="500" placeholder="Hodnota (např. ECOG 1, souhlas podepsán 12. 10.)" value="${escapeHtml(own?.value||'')}"><input data-decide-note="${id}" maxlength="2000" placeholder="Poznámka (nepovinné)" value="${escapeHtml(own?.note||'')}"><div class="decision-actions"><button class="secondary-button" data-decide="met" data-decide-criterion="${id}">${icon('circle-check')}Splněno</button><button class="secondary-button" data-decide="not_met" data-decide-criterion="${id}">${icon('circle-x')}Nesplněno</button>${own?`<button class="secondary-button" data-decide="clear" data-decide-criterion="${id}">${icon('rotate-ccw')}Zrušit doplnění</button>`:''}</div></div>`;
 }
 
+// One click from the list: confirm the screening's answer, or answer an open criterion from its title.
+function quickDecision(decision) {
+  if (state.mode === 'demo' || decision.clinician) return '';
+  const id = escapeHtml(decision.criterion_id);
+  if (['met', 'not_met'].includes(decision.status)) return `<button class="quick-button" data-decide="${decision.status}" data-decide-criterion="${id}" title="Potvrdit závěr screeningu">${icon('check')}Potvrdit</button>`;
+  return `<button class="quick-button met" data-decide="met" data-decide-criterion="${id}" title="Lékař: splněno">${icon('check')}Splněno</button><button class="quick-button not-met" data-decide="not_met" data-decide-criterion="${id}" title="Lékař: nesplněno">${icon('x')}Nesplněno</button>`;
+}
+
 async function decideCriterion(criterionId, choice) {
   const field=name=>document.querySelector(`[data-decide-${name}="${CSS.escape(criterionId)}"]`)?.value.trim()||null;
   const body=choice==='clear'?{status:null}:{status:choice,value:field('value'),note:field('note')};
@@ -211,7 +249,8 @@ async function decideCriterion(criterionId, choice) {
 function renderCriterion(decision,result) {
   const criterion=result.criteria.criteria.find(item=>item.id===decision.criterion_id);
   const expanded=state.expanded.has(decision.criterion_id);
-  return `<article class="criterion-row"><button class="criterion-toggle" data-criterion="${escapeHtml(criterion.id)}" aria-expanded="${expanded}"><span class="criterion-index">${String(result.criteria.criteria.indexOf(criterion)+1).padStart(2,'0')}</span><span class="criterion-copy"><span class="criterion-title">${escapeHtml(criterion.requirement)}</span><span class="criterion-reason">${escapeHtml(decision.reason)}</span></span>${decision.clinician?`<span class="status-pill status-missing" title="Doplněno ${date(decision.clinician.edited_at)}">${icon('pencil')}Lékař</span>`:''}${pill(decision.status)}${icon(expanded?'chevron-up':'chevron-down')}</button>${expanded?`<div class="evidence-area"><div class="evidence-block"><div class="evidence-label">POŽADAVEK STUDIE${criterion.role==='exclusion'?' · VYLUČOVACÍ PODMÍNKA':''}</div><div class="evidence-quote"><mark>${escapeHtml(criterion.source.quote)}</mark></div>${evidenceButton(criterion.source,'Původní znění kritéria','evidence-link')}</div><div class="evidence-label">DOKLAD V DOKUMENTACI</div>${decision.evidence.length?decision.evidence.map(evidence=>`<div class="evidence-block"><div class="evidence-quote"><mark>${escapeHtml(evidence.quote)}</mark></div>${evidenceButton(evidence,sourceTitle(evidence.source_id,result),'evidence-link')}</div>`).join(''):`<p class="empty-note">${decision.status==='missing'?'Potřebný údaj nebyl v posouzených zdrojích nalezen. Nejde o důkaz nesplnění.':'Pro tento závěr není ověřitelný doklad.'}</p><div class="cell-subtitle">Rozsah: ${result.patient_facts.source_ids.length} posouzených zdrojů</div>${result.patient_facts.source_ids.slice(0,4).map(identifier=>evidenceButton({source_id:identifier},sourceTitle(identifier,result),'evidence-link')).join('<br>')}`}${decision.action?`<div class="next-action">${icon('arrow-right')}<span>${escapeHtml(decision.action)}</span></div>`:''}${decisionForm(decision)}</div>`:''}</article>`;
+  const toggle=`data-criterion="${escapeHtml(criterion.id)}" aria-expanded="${expanded}"`;
+  return `<article class="criterion-row"><div class="criterion-line"><button class="criterion-toggle" ${toggle}><span class="criterion-index">${String(result.criteria.criteria.indexOf(criterion)+1).padStart(2,'0')}</span><span class="criterion-copy"><span class="criterion-title">${escapeHtml(criterion.requirement)}</span><span class="criterion-reason">${escapeHtml(decision.reason)}</span></span></button><span class="criterion-side">${decision.clinician?`<span class="status-pill status-missing" title="${decision.confirmed?'Potvrzeno lékařem':'Doplněno lékařem'} ${date(decision.clinician.edited_at)}">${icon(decision.confirmed?'shield-check':'pencil')}${decision.confirmed?'Potvrzeno':'Lékař'}</span>`:''}${pill(decision.status)}${quickDecision(decision)}<button class="icon-button criterion-chevron" ${toggle} aria-label="Podrobnosti kritéria">${icon(expanded?'chevron-up':'chevron-down')}</button></span></div>${expanded?`<div class="evidence-area"><div class="evidence-block"><div class="evidence-label">POŽADAVEK STUDIE${criterion.role==='exclusion'?' · VYLUČOVACÍ PODMÍNKA':''}</div><div class="evidence-quote"><mark>${escapeHtml(criterion.source.quote)}</mark></div>${evidenceButton(criterion.source,'Původní znění kritéria','evidence-link')}</div><div class="evidence-label">DOKLAD V DOKUMENTACI</div>${decision.evidence.length?decision.evidence.map(evidence=>`<div class="evidence-block"><div class="evidence-quote"><mark>${escapeHtml(evidence.quote)}</mark></div>${evidenceButton(evidence,sourceTitle(evidence.source_id,result),'evidence-link')}</div>`).join(''):`<p class="empty-note">${decision.status==='missing'?'Potřebný údaj nebyl v posouzených zdrojích nalezen. Nejde o důkaz nesplnění.':'Pro tento závěr není ověřitelný doklad.'}</p><div class="cell-subtitle">Rozsah: ${result.patient_facts.source_ids.length} posouzených zdrojů</div>${result.patient_facts.source_ids.slice(0,4).map(identifier=>evidenceButton({source_id:identifier},sourceTitle(identifier,result),'evidence-link')).join('<br>')}`}${decision.action?`<div class="next-action">${icon('arrow-right')}<span>${escapeHtml(decision.action)}</span></div>`:''}${decisionForm(decision)}</div>`:''}</article>`;
 }
 
 // Database overview: every study and patient in our database, with what we extracted and clinician edits.
@@ -568,7 +607,7 @@ function renderOverview() {
   const {patients, trials} = state.overview;
   const all = cohort();
   const processed = patients.filter(entry => entry.facts).length;
-  const header = heading('Přehled databáze', `${trials.length} ${plural(trials.length, 'studie', 'studie', 'studií')} (${trials.filter(trial => trial.criteria).length} s kritérii) · ${all.length} ${plural(all.length, 'pacient', 'pacienti', 'pacientů')} (${processed} ${plural(processed, 'zpracovaný', 'zpracovaní', 'zpracovaných')})`);
+  const header = heading('Přehled databáze', `${trials.length} ${plural(trials.length, 'studie', 'studie', 'studií')} (${trials.filter(trial => trial.criteria).length} s kritérii) · ${all.length} ${plural(all.length, 'pacient', 'pacienti', 'pacientů')} (${processed} ${plural(processed, 'zpracovaný', 'zpracovaní', 'zpracovaných')})`, backButton());
   const tabs = [['trials','Studie',trials.length],['patients','Pacienti',all.length]];
   const placeholder = state.overviewTab === 'trials' ? 'Hledat protokol, název, indikaci, NCT' : 'Hledat ID pacienta (později rodné číslo), jméno, diagnózu';
   const chips = overviewFilters[state.overviewTab].map(([value,title]) => disabledFilters[value] ? `<button class="chip" disabled title="${escapeHtml(disabledFilters[value])}">${icon('lock')}${title}</button>` : `<button class="chip ${state.overviewFilter === value ? 'selected' : ''}" data-overview-filter="${value}">${title}</button>`).join('');
@@ -576,7 +615,9 @@ function renderOverview() {
 }
 
 async function openMatch(patientId, trialId) {
+  const from = state.patient.id;
   if (patientId !== state.patient.id) await selectPatient(patientId);
+  state.history.push({view:state.view, patientId:from, trialId:state.trialId, overviewTab:state.overviewTab, overviewTrial:state.overviewTrial, overviewPatient:state.overviewPatient});
   state.view = 'matches'; state.trialId = trialId; state.expanded.clear(); state.filter = 'all';
   render(); scrollTo(0, 0);
 }
@@ -678,7 +719,7 @@ document.addEventListener('click',async event=>{
     const cellInput=document.querySelector('[data-cell-input]');
     // The page updates synchronously; the request finishes in the background.
     if(cellInput&&state.editing)commitCell(cellInput,0).catch(error=>toast(error.message));
-    if(button.dataset.view){if(button.dataset.view==='overview')await loadOverview();state.view=button.dataset.view;render();scrollTo(0,0);}
+    if(button.dataset.view){if(button.dataset.view==='overview')await loadOverview();state.history=[];state.view=button.dataset.view;render();scrollTo(0,0);}
     if(button.dataset.overviewTab){state.overviewTab=button.dataset.overviewTab;state.editMode=false;state.editing=null;state.overviewQuery='';state.overviewFilter='all';state.overviewLimit=40;render();}
     if(button.dataset.overviewFilter){state.overviewFilter=button.dataset.overviewFilter;state.overviewLimit=40;render();}
     if(button.dataset.action==='overview-more'){state.overviewLimit+=40;render();}
@@ -695,7 +736,8 @@ document.addEventListener('click',async event=>{
     if(button.dataset.criteriaRemove)await changeCriteria(state.overviewTrial,{remove:button.dataset.criteriaRemove});
     if(button.dataset.criteriaRestore)await changeCriteria(state.overviewTrial,{restore:button.dataset.criteriaRestore});
     if(button.hasAttribute('data-criteria-add')){const text=state.criteriaDraft.text.trim();if(text.length<2)throw new Error('Zadejte text kritéria.');await changeCriteria(state.overviewTrial,{add:{role:state.criteriaDraft.role,text}});state.criteriaDraft={...state.criteriaDraft,text:''};render();toast('Kritérium přidáno. Vyhodnocuji u pacientů…');}
-    if(button.dataset.editCriteria){const opened=window.open(`/?${new URLSearchParams({view:'overview',mode:state.mode,patient:state.patient.id,trial:button.dataset.editCriteria})}`,'trialscreen-overview','popup,width=1180,height=860');if(!opened)throw new Error('Prohlížeč zablokoval nové okno. Povolte vyskakovací okna pro tuto stránku.');opened.focus();}
+    if(button.dataset.editCriteria){navigate('overview',{overviewTab:'trials',overviewTrial:button.dataset.editCriteria,overviewFilter:'all',overviewQuery:''});state.criteriaEditing=button.dataset.editCriteria;await loadOverview();render();scrollTo(0,0);}
+    if(button.dataset.action==='back')await goBack();
     if(button.dataset.mode){if(state.mode==='real')state.realPatientId=state.patient.id;await setMode(button.dataset.mode);}
     if(button.dataset.source)await showSource(button.dataset.source,button.dataset.quote||'',button.dataset.sourcePatient||state.patient.id);
     if(button.hasAttribute('data-close-dialog'))button.closest('dialog').close();

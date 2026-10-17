@@ -218,12 +218,16 @@ def apply_decision_edits(match: dict, criteria: dict, overrides: dict) -> dict:
         edit = mine.get(decision["criterion_id"])
         if edit:
             detail = " · ".join(part for part in (edit.get("value"), edit.get("note")) if part)
+            # The same answer without a note confirms the screening: its reason and evidence stay.
+            confirmed = edit["status"] == decision["status"] and not detail
             decision = {
                 **decision,
                 "status": edit["status"],
-                "reason": ("Doplněno lékařem" + (f": {detail}" if detail else "")).rstrip(".") + ".",
+                "reason": decision["reason"] if confirmed
+                else ("Doplněno lékařem" + (f": {detail}" if detail else "")).rstrip(".") + ".",
                 "action": None,
                 "clinician": edit,
+                "confirmed": confirmed,
                 "original": {key: decision[key] for key in ("status", "reason", "action")},
             }
         decisions.append(decision)

@@ -150,3 +150,11 @@ body.nis-mode .trial-widget{font-family:"Inter",system-ui,sans-serif}
 .criterion-editor small{font-size:10px}
 .criteria-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0;padding:13px 16px;background:#fff;border:1px solid var(--line);border-left:3px solid #cbab71;font-size:11px}
 .criteria-footer span{flex:1;min-width:200px}
+/* --- Criterion rows: quick clinician answer next to the status --- */
+.criterion-line{display:flex;align-items:flex-start;gap:8px}.criterion-line .criterion-toggle{flex:1;min-width:0}
+.criterion-side{display:flex;align-items:center;gap:6px;padding-top:14px;flex-shrink:0}
+.criterion-chevron{width:26px;height:26px;border:0;background:none}
+.quick-button{display:inline-flex;align-items:center;gap:4px;min-height:0;padding:3px 9px;font-size:10px;font-weight:650;background:#fff;border:1px solid var(--line);border-radius:12px;color:var(--green);cursor:pointer}
+.quick-button svg{width:12px;height:12px}.quick-button:hover{background:var(--green-soft)}
+.quick-button.not-met{color:var(--red)}.quick-button.not-met:hover{background:var(--red-soft)}
+@media (max-width:850px){.criterion-line{flex-wrap:wrap}.criterion-side{padding:0 0 10px 32px;flex-wrap:wrap}}
