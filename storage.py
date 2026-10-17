@@ -35,6 +35,7 @@ SCHEMA = "".join(
     "json_extract(payload, '$.summary.match_percent') AS match_percent FROM matches;"
 )
 _ready: set[Path] = set()
+_writes = 0  # writes made by this process; saved_at alone has one-second resolution
 
 
 def connect() -> sqlite3.Connection:
@@ -72,7 +73,16 @@ def rows(table: str) -> dict[str, object]:
     return {key: json.loads(payload) for key, payload in result}
 
 
+def version() -> tuple:
+    """Changes whenever any table changes (this process or another one, e.g. precompute.py)."""
+    query = " UNION ALL ".join(f"SELECT count(*), max(saved_at) FROM {table}" for table in TABLES)
+    with closing(connect()) as connection:
+        return (str(PATH), _writes, tuple(connection.execute(query).fetchall()))
+
+
 def put(table: str, key: str, owner: str, value: object) -> None:
+    global _writes
+    _writes += 1
     with closing(connect()) as connection, connection:
         connection.execute(
             f"INSERT INTO {_table(table)}(key, owner, payload) VALUES (?, ?, ?) "

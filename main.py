@@ -1,6 +1,8 @@
 import asyncio
 import secrets
+import threading
 from collections import Counter
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -28,7 +30,16 @@ from pipeline import (
 from repository import DATASET, patient_record, patients, patients_by_id, trials, trials_by_id
 from screening import STATUSES, Logic, TrialExtraction, badge, evaluate_logic
 
-app = FastAPI(title="TrialScreen", docs_url="/api/docs")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Warm the database overview in the background so its first opening does not wait.
+    warm = asyncio.create_task(asyncio.to_thread(overview))
+    yield
+    warm.cancel()
+
+
+app = FastAPI(title="TrialScreen", docs_url="/api/docs", lifespan=lifespan)
 STATIC = Path(__file__).parent / "static"
 MAX_JOBS = 20
 jobs: dict[str, dict] = {}
@@ -229,14 +240,31 @@ def result_summary(result: dict) -> dict:
         "trial_id": result["trial_id"],
         "assessed_at": result["assessed_at"],
         **{key: result["summary"][key] for key in ("status", "badge", "match_percent", "counts", "total")},
+        # Only blocker is progression or a washout: a candidate for later.
+        "future": bool(result.get("future_watch")),
         # Rule-engine results also say how many criteria were assessable from documentation.
         **{key: result["summary"][key] for key in ("assessable", "administrative") if key in result["summary"]},
     }
 
 
+_overview_cache: dict = {}
+_overview_lock = threading.Lock()
+
+
 @app.get("/api/overview")
 def overview():
-    """All workbook studies and every screened patient, for browsing the whole database."""
+    """All workbook studies and every screened patient, for browsing the whole database.
+
+    Cached until any table changes (storage.version), so browsing is instant and edits show up immediately.
+    """
+    with _overview_lock:
+        current = storage.version()
+        if _overview_cache.get("version") != current:
+            _overview_cache.update(version=current, value=build_overview())
+        return _overview_cache["value"]
+
+
+def build_overview():
     # Benchmark comparisons are keyed "patient:trial@date" and never shown in the UI.
     owners = {match["patient_id"] for key, match in storage.rows("matches").items() if "@" not in key}
     owners |= {facts["patient_id"] for facts in storage.rows("facts").values() if not facts.get("as_of")}
