@@ -484,3 +484,15 @@ def test_as_of_hides_later_and_undated_records(tmp_path, monkeypatch):
     finally:
         for cached in (repository.patients, repository.patients_by_id, repository._patient_record):
             cached.cache_clear()
+
+
+def test_local_model_refuses_input_that_would_be_truncated(monkeypatch):
+    async def forbidden(*args, **kwargs):
+        pytest.fail("An over-long prompt must not be sent")
+
+    monkeypatch.setattr(pipeline.httpx.AsyncClient, "post", forbidden)
+    messages = [
+        {"role": "user", "content": "x" * int(pipeline.LOCAL_CONTEXT * pipeline.LOCAL_CHARS_PER_TOKEN)}
+    ]
+    with pytest.raises(ValueError, match="context window"):
+        asyncio.run(pipeline.local_completion("ollama:qwen2.5:7b", messages, Comparison))

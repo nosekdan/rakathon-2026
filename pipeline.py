@@ -41,6 +41,9 @@ LOCAL_PREFIX = "ollama:"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 LOCAL_CONTEXT = int(os.getenv("OLLAMA_CONTEXT", "32768"))
 LOCAL_TIMEOUT = 1800
+LOCAL_CHARS_PER_TOKEN = 1.8  # conservative; measured ~1.9 on this dataset
+LOCAL_ANSWER_TOKENS = 8192
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "180"))  # seconds per request
 REGISTRY_API = "https://clinicaltrials.gov/api/v2/studies"
 # Substrings of local site names; "Homolka" appears declined as "Na Homolce" in registry listings.
 SITE_TOKENS = ("motol", "homol")
@@ -209,7 +212,11 @@ async def cloud_completion(
     if not key:
         raise ValueError("API_KEY is not configured in .env")
     async with AsyncOpenAI(
-        base_url=BASE_URL, api_key="unused", default_headers={"api-key": key}, timeout=180, max_retries=1
+        base_url=BASE_URL,
+        api_key="unused",
+        default_headers={"api-key": key},
+        timeout=CLOUD_TIMEOUT,
+        max_retries=1,
     ) as client:
         response = await client.chat.completions.create(
             model=deployment,
@@ -228,6 +235,11 @@ async def local_completion(
     deployment: str, messages: list[ChatCompletionMessageParam], schema: type[BaseModel]
 ) -> str:
     """A model served by Ollama on this machine. Output is constrained to the JSON schema while decoding."""
+    # Ollama silently drops part of an over-long prompt, and its token counts do not reveal it afterwards.
+    # Refuse up front: Czech clinical JSON measured about 1.9 characters per token.
+    estimated = sum(len(message["content"]) for message in messages) / LOCAL_CHARS_PER_TOKEN
+    if estimated > LOCAL_CONTEXT - LOCAL_ANSWER_TOKENS:
+        raise ValueError("Input exceeds the local model's context window")
     async with httpx.AsyncClient(timeout=LOCAL_TIMEOUT) as client:
         response = await client.post(
             f"{OLLAMA_URL}/api/chat",
@@ -236,14 +248,11 @@ async def local_completion(
                 "messages": messages,
                 "format": schema.model_json_schema(),
                 "stream": False,
-                "options": {"num_ctx": LOCAL_CONTEXT, "num_predict": 14000, "temperature": 0},
+                "options": {"num_ctx": LOCAL_CONTEXT, "num_predict": LOCAL_ANSWER_TOKENS, "temperature": 0},
             },
         )
         response.raise_for_status()
         body = response.json()
-    # Ollama silently drops the start of an over-long prompt; refuse rather than extract from part of a record.
-    if body.get("prompt_eval_count", 0) >= LOCAL_CONTEXT - 16:
-        raise ValueError("Input exceeds the local model's context window")
     if body.get("done_reason") == "length":
         raise ValueError("Model output was truncated")
     return body["message"]["content"] or "{}"
