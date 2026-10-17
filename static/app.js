@@ -308,9 +308,15 @@ const sexName = sex => sex === 'male' ? 'Muž' : sex === 'female' ? 'Žena' : 'N
 const alertTag = result => result.badge ? `<span class="alert-tag" title="Všechna kritéria splněna, studie nabírá na pracovišti">${icon('bell-ring')}</span>` : '';
 const recruitment = {RECRUITING:'Nabírá', NOT_YET_RECRUITING:'Zatím nenabírá', ACTIVE_NOT_RECRUITING:'Aktivní, nenabírá', ENROLLING_BY_INVITATION:'Nábor na pozvání', COMPLETED:'Ukončena', TERMINATED:'Předčasně ukončena', SUSPENDED:'Pozastavena', WITHDRAWN:'Stažena'};
 const openStatuses = ['RECRUITING', 'ENROLLING_BY_INVITATION'];
-const overviewFilters = {trials:[['all','Všechny'],['open','Otevřené'],['candidates','S kandidáty']], patients:[['all','Všichni'],['candidates','S kandidátní studií'],['mine','Moji pacienti']]};
+const overviewFilters = {trials:[['all','Všechny'],['open','Otevřené'],['candidates','S kandidáty']], patients:[['all','Všichni'],['candidates','Se studií k posouzení'],['mine','Moji pacienti']]};
 // Candidate = no criterion contradicted by the record (missing or unclear never hides a patient).
 const isCandidate = result => result.counts.not_met === 0;
+// Studies to review for a patient: the same rule as the TrialScreen widget (no criterion contradicted and the
+// study still recruits), so the patient list and the widget show the same number.
+const toReview = results => {
+  const closed = new Set((state.overview?.trials || []).filter(trial => closedStatuses.includes(trial.registry?.status)).map(trial => trial.id));
+  return results.filter(result => result.status !== 'not_met' && !closed.has(result.trial_id));
+};
 const groupOf = result => isCandidate(result) ? 'candidate' : result.future ? 'future' : result.counts.not_met === 1 ? 'near' : 'other';
 const groups = [['candidate', 'Kandidáti', 'Žádné kritérium nesplněno – posoudit', 'circle-check'], ['near', 'Blízko', 'Právě jedno kritérium nesplněno', 'circle-dot'], ['future', 'Budoucí', 'Jediná překážka je progrese nebo časový odstup', 'calendar-clock'], ['other', 'Nevhodní', 'Více nesplněných kritérií', 'circle-x']];
 // Needs the clinician–patient assignment from the hospital system; shown so the workflow is visible.
@@ -641,13 +647,13 @@ const patientVerified = entry => Boolean(entry?.facts && entry.diagnoses_verifie
 function renderOverviewPatients() {
   const entries = Object.fromEntries(state.overview.patients.map(entry => [entry.id, entry]));
   const all = cohort();
-  const wanted = state.overviewFilter === 'candidates' ? (patient => (entries[patient.id]?.results || []).some(isCandidate)) : (() => true);
+  const wanted = state.overviewFilter === 'candidates' ? (patient => toReview(entries[patient.id]?.results || []).length) : (() => true);
   const listed = all.filter(patient => wanted(patient) && searchHit([patient.id, patient.name, patient.diagnoses, patient.rc]))
-    .sort((first, second) => (entries[second.id]?.results || []).filter(isCandidate).length - (entries[first.id]?.results || []).filter(isCandidate).length || Number(Boolean(entries[second.id]?.facts)) - Number(Boolean(entries[first.id]?.facts)) || Number(second.target) - Number(first.target));
+    .sort((first, second) => toReview(entries[second.id]?.results || []).length - toReview(entries[first.id]?.results || []).length || Number(Boolean(entries[second.id]?.facts)) - Number(Boolean(entries[first.id]?.facts)) || Number(second.target) - Number(first.target));
   if (!listed.length) return `<p class="empty-note">Žádný pacient neodpovídá hledání.</p>`;
   if (!listed.some(patient => patient.id === state.overviewPatient)) state.overviewPatient = listed.find(patient => patient.id === state.patient.id)?.id || listed[0].id;
   const selected = listed.find(patient => patient.id === state.overviewPatient);
-  return `<div class="matches-layout"><aside class="study-list" aria-label="Pacienti">${listed.slice(0, state.overviewLimit).map(patient => {const entry = entries[patient.id];return `<button class="study-choice ${patient.id === state.overviewPatient ? 'active' : ''}" data-overview-patient="${escapeHtml(patient.id)}">${patientVerified(entry) ? `<span class="review-icon verified" title="Lékař potvrdil diagnózy i všechny údaje pacienta" aria-label="Údaje pacienta potvrzeny lékařem">${icon('shield-check')}</span>` : ''}<div class="study-protocol id-label">${escapeHtml(patient.id)}</div><div class="study-name">${escapeHtml(patient.name)}</div><div class="study-score"><span>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)} · ${escapeHtml(patient.diagnoses || '—')}<br>${entry?.facts ? `${entry.results.filter(isCandidate).length} kandidátních studií · ${entry.facts} údajů${entry.verified ? ` · ${entry.verified} ověřeno` : ''}` : '<span class="muted">Nezpracováno</span>'}</span>${entry?.facts ? `<strong title="Kandidátní studie">${entry.results.filter(isCandidate).length}</strong>` : ''}</div></button>`;}).join('')}${listPager(listed.length)}</aside>${renderPatientDetail(selected)}</div>`;
+  return `<div class="matches-layout"><aside class="study-list" aria-label="Pacienti">${listed.slice(0, state.overviewLimit).map(patient => {const entry = entries[patient.id];return `<button class="study-choice ${patient.id === state.overviewPatient ? 'active' : ''}" data-overview-patient="${escapeHtml(patient.id)}">${patientVerified(entry) ? `<span class="review-icon verified" title="Lékař potvrdil diagnózy i všechny údaje pacienta" aria-label="Údaje pacienta potvrzeny lékařem">${icon('shield-check')}</span>` : ''}<div class="study-protocol id-label">${escapeHtml(patient.id)}</div><div class="study-name">${escapeHtml(patient.name)}</div><div class="study-score"><span>${escapeHtml(patient.age || '—')} / ${sexLabel(patient.sex)} · ${escapeHtml(patient.diagnoses || '—')}<br>${entry?.facts ? `${toReview(entry.results).length} studií k posouzení · ${entry.facts} údajů${entry.verified ? ` · ${entry.verified} ověřeno` : ''}` : '<span class="muted">Nezpracováno</span>'}</span>${entry?.facts ? `<strong title="Studie k posouzení (bez nesplněného kritéria, studie nabírá)">${toReview(entry.results).length}</strong>` : ''}</div></button>`;}).join('')}${listPager(listed.length)}</aside>${renderPatientDetail(selected)}</div>`;
 }
 
 function renderOverview() {
