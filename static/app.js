@@ -196,7 +196,9 @@ function patientCard(patient = state.patient) {
 // TrialScreen only appears as the embedded widget, which opens the TrialScreen window.
 // NIS shows only what the hospital system holds: no TrialScreen results, nothing extracted from notes by our rules.
 function nisPatients() {
-  const matches = cohort().filter(patient => searchHit([patient.id, patient.name, patient.diagnoses], state.nisQuery));
+  // The clinic's own patients first (target diagnosis from the cohort, not a TrialScreen result), most documented first.
+  const matches = cohort().filter(patient => searchHit([patient.id, patient.name, patient.diagnoses], state.nisQuery))
+    .sort((first, second) => Number(Boolean(second.target)) - Number(Boolean(first.target)) || (second.notes || 0) - (first.notes || 0));
   const shown = matches.slice(0, 60);
   // The open patient stays in the list even when it falls outside the first page.
   if (!shown.some(patient => patient.id === state.patient.id) && matches.some(patient => patient.id === state.patient.id)) shown.unshift(state.patient);
